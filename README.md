@@ -23,7 +23,7 @@ Bu proje, [easy_ViTPose](https://github.com/JunkyByte/easy_ViTPose) kütüphanes
 
 1. Tek bir görüntü veya klasördeki tüm görüntüler üzerinde **ViTPose çıkarımı (inference)** çalıştırmak (ViTPose-H, COCO-25 modeli).
 2. Tespit edilen eklem noktalarını canvas üzerinde **sürükleyerek interaktif biçimde düzenlemek**.
-3. Omuz, dirsek, kalça ve diz için **eklem açılarını** görüntü üzerinde göstermek.
+3. Omuz, dirsek, kalça, diz, ayak bileği ve ayak yönü için **eklem açılarını** görüntü üzerinde göstermek.
 4. Düzenlenen sonuçları JSON dosyasına **kaydedip** aşağı akış boru hatlarına aktarmak.
 5. Batch sonuçlarında araç çubuğuna gömülü **Prev / Next** kontrolleriyle kare kare gezinmek.
 6. Mevcut bir JSON dosyasındaki poz koordinatlarını kullanarak **iskelet görselleştirmesi** yapmak (yeniden çıkarım gerekmez).
@@ -67,6 +67,7 @@ Bu araç; jimnastik, atletizm gibi alanlarda otomatik poz tahminlerinin manuel o
 | **👁 Names** | Eklem adı etiketlerini gösterir / gizler |
 | **💾 Save PNG** | Güncel canvas görünümünü PNG olarak indirir |
 | **📐 Açılar** | Eklem açısı yay göstergelerini açar / kapatır |
+| **∠ Özel Açı** | Standart listede olmayan bir açı için 3 keypoint seçerek açı hesaplar |
 | **⤢ Tam Ekran** | Tam ekran moduna geçer |
 | **● Noktalar** | Tüm eklem noktaları ve iskeleti gösterir / gizler |
 | **◀ Prev / Next ▶** | Önceki / sonraki batch görüntüsüne geçer |
@@ -80,6 +81,7 @@ Bu araç; jimnastik, atletizm gibi alanlarda otomatik poz tahminlerinin manuel o
 easy_ViTPose/
 ├── app.py                      # Gradio uygulama giriş noktası
 ├── pose_editor.py              # İnteraktif canvas düzenleyici (HTML/CSS/JS + Python yardımcıları)
+├── ANGLE_DEFINITIONS.md        # Eklem açılarının keypoint/vektör tanımları ve literatür notları
 ├── inference.py                # Komut satırı çıkarım betiği (orijinal easy_ViTPose)
 ├── export.py                   # ONNX / TensorRT dışa aktarma
 ├── model_split.py              # İnce ayar için ön eğitimli checkpoint dönüştürücü
@@ -290,6 +292,34 @@ Bu kullanım özellikle daha önce çıkarımı yapılmış veya manuel olarak d
 ```
 
 Her eklem noktası değeri görüntü piksel koordinatlarında `[y, x, güven_skoru]` biçimindedir.
+
+`Apply & Save` sırasında ekranda görünen açılar JSON'a yazılır. Standart **Açılar** görünümü açıksa kırmızı standart açılar `standard_angles` alanına, manuel seçilen özel açılar `manual_angles` alanına kaydedilir. Tüm kayıtlar birlikte `angles` alanında da tutulur.
+
+Her kayıt açının hangi üç keypoint ile hesaplandığını, merkez eklemi, vektörleri ve derece değerini içerir:
+
+```json
+{
+  "manual_angles": [
+    {
+      "label": "manual_angle_1",
+      "keypoint_indices": [6, 8, 10],
+      "keypoint_names": ["right_shoulder", "right_elbow", "right_wrist"],
+      "vertex_index": 8,
+      "vertex_name": "right_elbow",
+      "angle_degrees": 145.32,
+      "source": "manual_canvas_selection"
+    }
+  ]
+}
+```
+
+Aynı açı kayıtları ayrıca ayrı dosya olarak şu klasöre yazılır:
+
+```text
+easy_ViTPose/temp/açılar/
+```
+
+Dosya adı kaynak JSON'a göre üretilir ve `_angles.json` ile biter.
 
 ---
 

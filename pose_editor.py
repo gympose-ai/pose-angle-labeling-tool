@@ -9,6 +9,7 @@ fresh event handlers every time the component value changes.
 import json
 import io
 import base64
+from datetime import datetime
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
@@ -21,6 +22,21 @@ from scipy.interpolate import RBFInterpolator
 from easy_ViTPose.vit_utils.visualization import draw_points_and_skeleton, joints_dict
 
 _CANVAS_MAX_PX = 1200
+_ANGLE_OUTPUT_DIR = Path(__file__).parent / "temp" / "açılar"
+_STANDARD_ANGLE_DEFINITIONS = [
+    (8, 6, 12, "R.Omuz"),
+    (9, 7, 13, "L.Omuz"),
+    (6, 8, 10, "R.Dirsek"),
+    (7, 9, 11, "L.Dirsek"),
+    (6, 12, 14, "R.Kalca"),
+    (7, 13, 15, "L.Kalca"),
+    (12, 14, 16, "R.Diz"),
+    (13, 15, 17, "L.Diz"),
+    (14, 16, 18, "R.AyakBilegi"),
+    (15, 17, 21, "L.AyakBilegi"),
+    (20, 16, 18, "R.AyakYonu"),
+    (23, 17, 21, "L.AyakYonu"),
+]
 
 # ── HTML template ────────────────────────────────────────────────────────────
 # ${value} is replaced by Gradio with the component value (base64-encoded JSON).
@@ -34,6 +50,7 @@ EDITOR_HTML_TEMPLATE = """
     <button class="pe-btn pe-names"  data-action="names">&#128065; Names</button>
     <button class="pe-btn pe-save"   data-action="save">&#128190; Save PNG</button>
     <button class="pe-btn pe-angles" data-action="angles">&#128208; A&#231;&#305;lar</button>
+    <button class="pe-btn pe-custom-angle" data-action="custom-angle">&#8736; &#214;zel A&#231;&#305;</button>
     <button class="pe-btn pe-fullscreen" data-action="fullscreen">&#x2922; Tam Ekran</button>
     <button class="pe-btn pe-keypoints" data-action="keypoints">&#x25CF; Noktalar</button>
     <span class="pe-info">Goruntu yukleniyor...</span>
@@ -64,6 +81,8 @@ EDITOR_CSS_TEMPLATE = """
 .pe-names  { background: #2980b9; }
 .pe-save   { background: #8e44ad; }
 .pe-angles { background: #27ae60; }
+.pe-custom-angle { background: #16a085; }
+.pe-custom-angle.is-active { outline: 2px solid #fff; box-shadow: 0 0 0 2px rgba(22,160,133,.45); }
 .pe-fullscreen { background: #e67e22; }
 .pe-keypoints { background: #d35400; }
 .pe-info   { font-size: 12px; color: #aaa; font-family: monospace; }
@@ -149,6 +168,16 @@ function bootEditor() {
   var names     = DATA.nm;
   var csScale   = DATA.cs;
   var dragging  = null;
+  var hoveredAngle = null;
+  var angleHitboxes = [];
+  var customAngleMode = false;
+  var customAnglePick = [];
+  var customAngles = (DATA.manual_angles || []).map(function(a) {
+    var pts = Array.isArray(a) ? a : (a.keypoint_indices || a.points || []);
+    return [Number(pts[0]), Number(pts[1]), Number(pts[2])];
+  }).filter(function(a) {
+    return a.length === 3 && a.every(function(v) { return Number.isInteger(v); });
+  });
   var showNames  = true;
   var showAngles = false;
   var showKeypoints = true;
@@ -160,7 +189,7 @@ function bootEditor() {
   var MIN_ZOOM  = 0.5,  MAX_ZOOM = 10.0;
 
   function emitKeypointsToHiddenOutput() {
-    var payload = JSON.stringify({ keypoints: keypoints, orig_keypoints: origKps, canvas_scale: csScale });
+    var payload = JSON.stringify(editorStatePayload());
     var container = document.querySelector('#kp_editor_output');
     var el = container
       ? (container.querySelector('textarea') || container.querySelector('input[type="text"]') || container.querySelector('input'))
@@ -181,6 +210,18 @@ function bootEditor() {
 
   function kpC(i) { return 'hsl(' + Math.round(i / keypoints.length * 300) + ',80%,55%)'; }
   function skC(i) { return 'hsl(' + Math.round(i / skeleton.length  * 300) + ',70%,50%)'; }
+
+  function editorStatePayload() {
+    return {
+      keypoints: keypoints,
+      orig_keypoints: origKps,
+      canvas_scale: csScale,
+      show_standard_angles: showAngles,
+      manual_angles: customAngles.map(function(a) {
+        return { keypoint_indices: [a[0], a[1], a[2]] };
+      })
+    };
+  }
 
   /* load image then size + draw canvas */
   var img = new window.Image();
@@ -243,7 +284,11 @@ function bootEditor() {
         }
       }
     }
+    angleHitboxes = [];
     drawAngles();
+    drawCustomAngles();
+    drawCustomAnglePick();
+    drawAngleTooltip();
     ctx.restore();
   }
 
@@ -264,13 +309,17 @@ function bootEditor() {
     /* [idxA, idxB(vertex), idxC, label]  — standard COCO-25 indices */
     var ANG = [
       [8,  6,  12, 'R.Omuz'],
-      [7,  5,  11, 'L.Omuz'],
+      [9,  7,  13, 'L.Omuz'],
       [6,  8,  10, 'R.Dirsek'],
-      [5,  7,   9, 'L.Dirsek'],
+      [7,  9,  11, 'L.Dirsek'],
       [6,  12, 14, 'R.Kalca'],
-      [5,  11, 13, 'L.Kalca'],
+      [7,  13, 15, 'L.Kalca'],
       [12, 14, 16, 'R.Diz'],
-      [11, 13, 15, 'L.Diz']
+      [13, 15, 17, 'L.Diz'],
+      [14, 16, 18, 'R.AyakBilegi'],
+      [15, 17, 21, 'L.AyakBilegi'],
+      [20, 16, 18, 'R.AyakYonu'],
+      [23, 17, 21, 'L.AyakYonu']
     ];
     ctx.save();
     for (var ai = 0; ai < ANG.length; ai++) {
@@ -323,8 +372,202 @@ function bootEditor() {
       ctx.strokeText(ang + '\u00b0', tx, ty);
       ctx.fillStyle = '#FF3333';
       ctx.fillText(ang + '\u00b0', tx, ty);
+
+      angleHitboxes.push({
+        x: tx,
+        y: ty,
+        r: Math.max(24, arcR + 14),
+        label: ANG[ai][3],
+        angle: ang,
+        points: [
+          nameForKeypoint(ia) + ' [' + ia + ']',
+          nameForKeypoint(ib) + ' [' + ib + ']',
+          nameForKeypoint(ic) + ' [' + ic + ']'
+        ],
+        vertex: nameForKeypoint(ib) + ' [' + ib + ']'
+      });
     }
     ctx.restore();
+  }
+
+  function drawCustomAngles() {
+    if (!customAngles.length) return;
+    ctx.save();
+    for (var ai = 0; ai < customAngles.length; ai++) {
+      var def = customAngles[ai];
+      drawCustomAngle(def[0], def[1], def[2], 'Ozel Aci ' + (ai + 1));
+    }
+    ctx.restore();
+  }
+
+  function drawCustomAngle(ia, ib, ic, label) {
+    if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) return;
+    var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
+    if (!ka || !kb || !kc || ka.c < 0.1 || kb.c < 0.1 || kc.c < 0.1) return;
+    var ang = calcAngle(ka, kb, kc);
+    if (ang === null) return;
+
+    var dA   = Math.sqrt((ka.x-kb.x)*(ka.x-kb.x) + (ka.y-kb.y)*(ka.y-kb.y));
+    var dC   = Math.sqrt((kc.x-kb.x)*(kc.x-kb.x) + (kc.y-kb.y)*(kc.y-kb.y));
+    var arcR = Math.max(12 / zoom, Math.min(30 / zoom, Math.min(dA, dC) * 0.35));
+
+    var angA = Math.atan2(ka.y - kb.y, ka.x - kb.x);
+    var angC = Math.atan2(kc.y - kb.y, kc.x - kb.x);
+    var diff = angC - angA;
+    while (diff >  Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(kb.x, kb.y, arcR, angA, angC, diff < 0);
+    ctx.strokeStyle = 'rgba(0,209,255,0.95)';
+    ctx.lineWidth = 2 / zoom;
+    ctx.stroke();
+
+    ctx.setLineDash([4 / zoom, 3 / zoom]);
+    ctx.beginPath();
+    ctx.moveTo(kb.x, kb.y);
+    ctx.lineTo(kb.x + arcR * Math.cos(angA), kb.y + arcR * Math.sin(angA));
+    ctx.moveTo(kb.x, kb.y);
+    ctx.lineTo(kb.x + arcR * Math.cos(angC), kb.y + arcR * Math.sin(angC));
+    ctx.strokeStyle = 'rgba(0,209,255,0.55)';
+    ctx.lineWidth = 1.5 / zoom;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    var mvx = (ka.x - kb.x) / (dA || 1) + (kc.x - kb.x) / (dC || 1);
+    var mvy = (ka.y - kb.y) / (dA || 1) + (kc.y - kb.y) / (dC || 1);
+    var mv  = Math.sqrt(mvx * mvx + mvy * mvy) || 1;
+    var tx  = kb.x + (arcR + 18 / zoom) * mvx / mv;
+    var ty  = kb.y + (arcR + 18 / zoom) * mvy / mv;
+    ctx.font      = 'bold ' + (13 / zoom) + 'px sans-serif';
+    ctx.lineWidth = 3 / zoom;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(ang + '\u00b0', tx, ty);
+    ctx.fillStyle = '#00d1ff';
+    ctx.fillText(ang + '\u00b0', tx, ty);
+
+    angleHitboxes.push({
+      x: tx,
+      y: ty,
+      r: Math.max(24 / zoom, arcR + 14 / zoom),
+      label: label,
+      angle: ang,
+      points: [
+        nameForKeypoint(ia) + ' [' + ia + ']',
+        nameForKeypoint(ib) + ' [' + ib + ']',
+        nameForKeypoint(ic) + ' [' + ic + ']'
+      ],
+      vertex: nameForKeypoint(ib) + ' [' + ib + ']'
+    });
+  }
+
+  function drawCustomAnglePick() {
+    if (!customAngleMode || !customAnglePick.length) return;
+    ctx.save();
+    ctx.setLineDash([]);
+    for (var i = 0; i < customAnglePick.length; i++) {
+      var idx = customAnglePick[i];
+      var kp = keypoints[idx];
+      if (!kp || kp.c < 0.1) continue;
+      ctx.beginPath();
+      ctx.arc(kp.x, kp.y, (R + 5) / zoom, 0, 2 * Math.PI);
+      ctx.strokeStyle = i === 1 ? '#ffd166' : '#00d1ff';
+      ctx.lineWidth = 3 / zoom;
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold ' + (13 / zoom) + 'px sans-serif';
+      ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+      ctx.lineWidth = 3 / zoom;
+      ctx.strokeText(String(i + 1), kp.x + 10 / zoom, kp.y - 8 / zoom);
+      ctx.fillText(String(i + 1), kp.x + 10 / zoom, kp.y - 8 / zoom);
+    }
+    if (customAnglePick.length >= 2) {
+      var a = keypoints[customAnglePick[0]];
+      var b = keypoints[customAnglePick[1]];
+      if (a && b) {
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.strokeStyle = 'rgba(0,209,255,0.65)';
+        ctx.lineWidth = 2 / zoom;
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function nameForKeypoint(i) {
+    return (names && names[i]) ? names[i] : String(i);
+  }
+
+  function findHoveredAngle(p) {
+    if (!showAngles && !customAngles.length) return null;
+    for (var i = angleHitboxes.length - 1; i >= 0; i--) {
+      var h = angleHitboxes[i];
+      var dx = p.x - h.x, dy = p.y - h.y;
+      if (Math.sqrt(dx * dx + dy * dy) <= h.r) return h;
+    }
+    return null;
+  }
+
+  function drawAngleTooltip() {
+    if (!hoveredAngle) return;
+
+    var lines = [
+      hoveredAngle.label + ': ' + hoveredAngle.angle + '\u00b0',
+      'Keypointler: ' + hoveredAngle.points.join(' - '),
+      'Merkez: ' + hoveredAngle.vertex
+    ];
+    var fontSize = 12 / zoom;
+    var pad = 8 / zoom;
+    var lineH = 17 / zoom;
+    ctx.font = 'bold ' + fontSize + 'px sans-serif';
+
+    var w = 0;
+    for (var i = 0; i < lines.length; i++) {
+      w = Math.max(w, ctx.measureText(lines[i]).width);
+    }
+    var boxW = w + pad * 2;
+    var boxH = lineH * lines.length + pad * 2;
+    var x = hoveredAngle.x + 16 / zoom;
+    var y = hoveredAngle.y - boxH - 12 / zoom;
+
+    if (x + boxW > canvas.width) x = hoveredAngle.x - boxW - 16 / zoom;
+    if (y < 0) y = hoveredAngle.y + 18 / zoom;
+    x = clamp(x, 2 / zoom, canvas.width - boxW - 2 / zoom);
+    y = clamp(y, 2 / zoom, canvas.height - boxH - 2 / zoom);
+
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(20,20,28,0.94)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 1.5 / zoom;
+    roundedRectPath(x, y, boxW, boxH, 6 / zoom);
+    ctx.fill();
+    ctx.stroke();
+
+    for (var li = 0; li < lines.length; li++) {
+      ctx.fillStyle = li === 0 ? '#ff6b6b' : '#ffffff';
+      ctx.font = (li === 0 ? 'bold ' : '') + fontSize + 'px sans-serif';
+      ctx.fillText(lines[li], x + pad, y + pad + lineH * (li + 0.72));
+    }
+    ctx.restore();
+  }
+
+  function roundedRectPath(x, y, w, h, r) {
+    r = Math.max(0, Math.min(r, w / 2, h / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
   }
 
   /* coordinate helpers */
@@ -369,6 +612,52 @@ function bootEditor() {
   }
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function setCustomAngleMode(active) {
+    customAngleMode = active;
+    customAnglePick = [];
+    if (customAngleMode) showKeypoints = true;
+    var btn = element.querySelector('[data-action="custom-angle"]');
+    if (btn) btn.classList.toggle('is-active', customAngleMode);
+    canvas.style.cursor = customAngleMode ? 'copy' : 'crosshair';
+    render();
+    if (info) {
+      info.textContent = customAngleMode
+        ? 'Ozel aci: 1. nokta, merkez nokta, 3. nokta seklinde secin.'
+        : 'Ozel aci secimi kapatildi.';
+    }
+  }
+
+  function pickCustomAngleKeypoint(idx) {
+    if (idx === null || idx === undefined) return;
+    if (customAnglePick.indexOf(idx) !== -1) {
+      if (info) info.textContent = 'Bu keypoint zaten secildi; farkli bir nokta secin.';
+      return;
+    }
+    customAnglePick.push(idx);
+    if (customAnglePick.length < 3) {
+      render();
+      if (info) {
+        var step = customAnglePick.length === 1 ? 'Merkez noktayi secin.' : '3. noktayi secin.';
+        info.textContent = 'Ozel aci: ' + customAnglePick.length + '/3 secildi. ' + step;
+      }
+      return;
+    }
+
+    customAngles.push([customAnglePick[0], customAnglePick[1], customAnglePick[2]]);
+    var a = keypoints[customAnglePick[0]];
+    var b = keypoints[customAnglePick[1]];
+    var c = keypoints[customAnglePick[2]];
+    var ang = (a && b && c) ? calcAngle(a, b, c) : null;
+    customAnglePick = [];
+    render();
+    emitKeypointsToHiddenOutput();
+    if (info) {
+      info.textContent = ang === null
+        ? 'Ozel aci eklenemedi; secilen noktalari kontrol edin.'
+        : 'Ozel aci eklendi: ' + ang + '\u00b0. Yeni aci icin 1. noktayi secin.';
+    }
+  }
 
   function finishDrag() {
     if (dragging !== null && info)
@@ -420,6 +709,17 @@ function bootEditor() {
       return;
     }
     var kpIdx = nearest(getPos(e));
+    if (customAngleMode && e.button === 0) {
+      if (kpIdx !== null) {
+        pickCustomAngleKeypoint(kpIdx);
+        return;
+      }
+      isPanning = true;
+      panStart  = getRawPos(e);
+      panOrigin = {x: panX, y: panY};
+      canvas.style.cursor = 'move';
+      return;
+    }
     if (kpIdx !== null) {        /* left click on keypoint → drag */
       dragging = kpIdx;
       canvas.style.cursor = 'grabbing';
@@ -443,9 +743,15 @@ function bootEditor() {
     }
     var p = getPos(e);
     if (dragging === null) {
-      canvas.style.cursor = nearest(p) !== null ? 'grab' : (zoom > 1 ? 'zoom-in' : 'crosshair');
+      var nextHoveredAngle = findHoveredAngle(p);
+      if (nextHoveredAngle !== hoveredAngle) {
+        hoveredAngle = nextHoveredAngle;
+        render();
+      }
+      canvas.style.cursor = nearest(p) !== null ? (customAngleMode ? 'copy' : 'grab') : (hoveredAngle ? 'help' : (zoom > 1 ? 'zoom-in' : 'crosshair'));
       return;
     }
+    hoveredAngle = null;
     keypoints[dragging].x = clamp(p.x, 0, canvas.width);
     keypoints[dragging].y = clamp(p.y, 0, canvas.height);
     render();
@@ -459,13 +765,20 @@ function bootEditor() {
   canvas.addEventListener('mouseleave', function() {
     isPanning = false;
     dragging  = null;
+    hoveredAngle = null;
     canvas.style.cursor = 'crosshair';
+    render();
   });
 
   /* touch — same rule: no info.textContent inside touchmove */
   canvas.addEventListener('touchstart', function(e) {
     e.preventDefault();
-    dragging = nearest(getPos(e));
+    var touched = nearest(getPos(e));
+    if (customAngleMode) {
+      if (touched !== null) pickCustomAngleKeypoint(touched);
+      return;
+    }
+    dragging = touched;
     if (dragging !== null && info) info.textContent = names[dragging] + ' surukleniyor...';
   }, { passive: false });
 
@@ -504,13 +817,15 @@ function bootEditor() {
   var peWrap = element.querySelector('.pe-wrap');
   if (peWrap) {
     peWrap._peGetKps = function() {
-      return JSON.stringify({ keypoints: keypoints, orig_keypoints: origKps, canvas_scale: csScale });
+      return JSON.stringify(editorStatePayload());
     };
   }
 
   rebind('[data-action="reset"]', function() {
     keypoints = JSON.parse(JSON.stringify(origKps));
     zoom = 1.0; panX = 0; panY = 0;
+    customAnglePick = [];
+    customAngles = [];
     render();
     emitKeypointsToHiddenOutput();
     if (info) info.textContent = 'Orijinal konumlar ve zoom sifirlandi.';
@@ -533,6 +848,10 @@ function bootEditor() {
     showAngles = !showAngles;
     render();
     if (info) info.textContent = showAngles ? 'Acilar gosteriliyor.' : 'Acilar gizlendi.';
+  });
+
+  rebind('[data-action="custom-angle"]', function() {
+    setCustomAngleMode(!customAngleMode);
   });
 
   rebind('[data-action="fullscreen"]', function() {
@@ -665,6 +984,7 @@ def prepare_editor(
         "sk":  skeleton,
         "nm":  kp_names,
         "cs":  cs,
+        "manual_angles": data.get("manual_angles", []),
     }, separators=(",", ":"))
 
     value = base64.b64encode(payload.encode("utf-8")).decode("ascii")
@@ -850,6 +1170,7 @@ def prepare_editor_from_path(
         "sk":  skeleton,
         "nm":  kp_names,
         "cs":  cs,
+        "manual_angles": data.get("manual_angles", []),
     }, separators=(",", ":"))
 
     value = base64.b64encode(payload.encode("utf-8")).decode("ascii")
@@ -872,10 +1193,181 @@ def _extract_existing_json_path(text: str) -> str:
     return ""
 
 
+def _calc_angle_degrees_from_rc(kps_rc: list, ia: int, ib: int, ic: int) -> Optional[float]:
+    """Return the 2D angle at keypoint B from image-space (row, col, conf) keypoints."""
+    try:
+        a = kps_rc[ia]
+        b = kps_rc[ib]
+        c = kps_rc[ic]
+        bax = float(a[1]) - float(b[1])
+        bay = float(a[0]) - float(b[0])
+        bcx = float(c[1]) - float(b[1])
+        bcy = float(c[0]) - float(b[0])
+        ma = float(np.hypot(bax, bay))
+        mc = float(np.hypot(bcx, bcy))
+        if ma < 1 or mc < 1:
+            return None
+        cosang = max(-1.0, min(1.0, (bax * bcx + bay * bcy) / (ma * mc)))
+        return round(float(np.degrees(np.arccos(cosang))), 3)
+    except Exception:
+        return None
+
+
+def _manual_angle_indices(raw_angle: Any) -> Optional[list]:
+    if isinstance(raw_angle, dict):
+        raw_indices = raw_angle.get("keypoint_indices") or raw_angle.get("points")
+    else:
+        raw_indices = raw_angle
+    if not isinstance(raw_indices, (list, tuple)) or len(raw_indices) != 3:
+        return None
+    try:
+        indices = [int(raw_indices[0]), int(raw_indices[1]), int(raw_indices[2])]
+    except Exception:
+        return None
+    if len(set(indices)) != 3 or any(i < 0 or i >= 25 for i in indices):
+        return None
+    return indices
+
+
+def _build_manual_angle_records(
+    raw_angles: Any,
+    kps_rc: list,
+    idx_to_name: Dict[int, str],
+) -> list:
+    records = []
+    if not isinstance(raw_angles, list):
+        return records
+
+    seen = set()
+    for n, raw_angle in enumerate(raw_angles, start=1):
+        indices = _manual_angle_indices(raw_angle)
+        if indices is None:
+            continue
+        key = tuple(indices)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        ia, ib, ic = indices
+        angle_degrees = _calc_angle_degrees_from_rc(kps_rc, ia, ib, ic)
+        names = [idx_to_name.get(i, str(i)) for i in indices]
+        records.append({
+            "label": f"manual_angle_{len(records) + 1}",
+            "keypoint_indices": indices,
+            "keypoint_names": names,
+            "vertex_index": ib,
+            "vertex_name": idx_to_name.get(ib, str(ib)),
+            "vectors": [
+                {
+                    "from_index": ib,
+                    "from_name": idx_to_name.get(ib, str(ib)),
+                    "to_index": ia,
+                    "to_name": idx_to_name.get(ia, str(ia)),
+                },
+                {
+                    "from_index": ib,
+                    "from_name": idx_to_name.get(ib, str(ib)),
+                    "to_index": ic,
+                    "to_name": idx_to_name.get(ic, str(ic)),
+                },
+            ],
+            "angle_degrees": angle_degrees,
+            "source": "manual_canvas_selection",
+            "method": "2D angle between vectors B->A and B->C; keypoint order is [A, B(vertex), C]",
+        })
+    return records
+
+
+def _build_standard_angle_records(
+    kps_rc: list,
+    idx_to_name: Dict[int, str],
+) -> list:
+    records = []
+    for ia, ib, ic, label in _STANDARD_ANGLE_DEFINITIONS:
+        if ia >= len(kps_rc) or ib >= len(kps_rc) or ic >= len(kps_rc):
+            continue
+        if float(kps_rc[ia][2]) < 0.1 or float(kps_rc[ib][2]) < 0.1 or float(kps_rc[ic][2]) < 0.1:
+            continue
+        angle_degrees = _calc_angle_degrees_from_rc(kps_rc, ia, ib, ic)
+        names = [idx_to_name.get(i, str(i)) for i in (ia, ib, ic)]
+        records.append({
+            "label": label,
+            "keypoint_indices": [ia, ib, ic],
+            "keypoint_names": names,
+            "vertex_index": ib,
+            "vertex_name": idx_to_name.get(ib, str(ib)),
+            "vectors": [
+                {
+                    "from_index": ib,
+                    "from_name": idx_to_name.get(ib, str(ib)),
+                    "to_index": ia,
+                    "to_name": idx_to_name.get(ia, str(ia)),
+                },
+                {
+                    "from_index": ib,
+                    "from_name": idx_to_name.get(ib, str(ib)),
+                    "to_index": ic,
+                    "to_name": idx_to_name.get(ic, str(ic)),
+                },
+            ],
+            "angle_degrees": angle_degrees,
+            "source": "standard_canvas_angle",
+            "method": "2D angle between vectors B->A and B->C; keypoint order is [A, B(vertex), C]",
+        })
+    return records
+
+
+def _safe_filename_part(value: str) -> str:
+    keep = []
+    for ch in value:
+        keep.append(ch if ch.isalnum() or ch in ("-", "_") else "_")
+    return "".join(keep).strip("_") or "pose"
+
+
+def _manual_angle_schema() -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "coordinate_source": "keypoints",
+        "keypoint_order": "[A, B(vertex), C]",
+        "method": "2D angle between vectors B->A and B->C",
+        "unit": "degrees",
+    }
+
+
+def _save_angles_sidecar_json(
+    manual_angle_records: list,
+    standard_angle_records: list,
+    source_json_path: str,
+    original_img_path: str,
+) -> Optional[Path]:
+    """Write manual angle records to easy_ViTPose/temp/açılar as a separate JSON file."""
+    _ANGLE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    source_path = Path(source_json_path) if source_json_path else None
+    if source_path:
+        base = f"{source_path.parent.name}_{source_path.stem}"
+    else:
+        base = Path(original_img_path or "pose").stem
+    out_path = _ANGLE_OUTPUT_DIR / f"{_safe_filename_part(base)}_angles.json"
+
+    out_data = {
+        "source_json": str(source_path) if source_path else "",
+        "source_image": original_img_path or "",
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "manual_angle_schema": _manual_angle_schema(),
+        "angles": standard_angle_records + manual_angle_records,
+        "standard_angles": standard_angle_records,
+        "manual_angles": manual_angle_records,
+    }
+    out_path.write_text(json.dumps(out_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path
+
+
 def _build_editor_payload_from_kps(
     original_img_path: str,
     kps_rc: list,
     idx_to_name: Optional[Dict[int, str]] = None,
+    manual_angles: Optional[list] = None,
 ) -> Tuple[str, str]:
     """Create editor payload directly from (row, col, conf) keypoints."""
     img_path = Path((original_img_path or "").strip())
@@ -899,6 +1391,7 @@ def _build_editor_payload_from_kps(
         "sk": joints_dict()["coco_25"]["skeleton"],
         "nm": kp_names,
         "cs": cs,
+        "manual_angles": manual_angles or [],
     }, separators=(",", ":"))
 
     return base64.b64encode(payload.encode("utf-8")).decode("ascii"), "OK"
@@ -909,6 +1402,7 @@ def _build_editor_payload_from_canvas_kps(
     canvas_kps: list,
     canvas_scale: float,
     idx_to_name: Optional[Dict[int, str]] = None,
+    manual_angles: Optional[list] = None,
 ) -> Tuple[str, str]:
     """Create editor payload from current canvas-space keypoints (x, y, c)."""
     img_path = Path((original_img_path or "").strip())
@@ -941,6 +1435,7 @@ def _build_editor_payload_from_canvas_kps(
       "sk": joints_dict()["coco_25"]["skeleton"],
       "nm": kp_names,
       "cs": cs,
+      "manual_angles": manual_angles or [],
     }, separators=(",", ":"))
 
     return base64.b64encode(payload.encode("utf-8")).decode("ascii"), "OK"
@@ -977,6 +1472,8 @@ def apply_and_save_keypoints(
 
     kps_list = payload["keypoints"]
     canvas_scale = float(payload.get("canvas_scale", 1.0))
+    raw_manual_angles = payload.get("manual_angles", [])
+    save_standard_angles = bool(payload.get("show_standard_angles", False))
 
     # Convert canvas coords -> image coords (row, col, c)
     kps_for_json = [[0.0, 0.0, 0.0] for _ in range(25)]
@@ -992,12 +1489,17 @@ def apply_and_save_keypoints(
     idx_to_name: Dict[int, str] = {i: str(i) for i in range(25)}
     json_path = _extract_existing_json_path(json_path_str or "")
 
+    manual_angle_records = _build_manual_angle_records(raw_manual_angles, kps_for_json, idx_to_name)
+    standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name) if save_standard_angles else []
+
     if json_path:
       try:
         p = Path(json_path)
         orig_data = json.loads(p.read_text(encoding="utf-8"))
 
         idx_to_name = {int(k): v for k, v in orig_data.get("skeleton", {}).items()} or idx_to_name
+        manual_angle_records = _build_manual_angle_records(raw_manual_angles, kps_for_json, idx_to_name)
+        standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name) if save_standard_angles else []
 
         if not orig_data.get("keypoints") or not isinstance(orig_data["keypoints"], list):
           orig_data["keypoints"] = [{"0": kps_for_json}]
@@ -1009,16 +1511,29 @@ def apply_and_save_keypoints(
           person_key = "0" if "0" in person_dict else next(iter(person_dict.keys()))
           person_dict[person_key] = kps_for_json
 
+        orig_data["angles"] = standard_angle_records + manual_angle_records
+        orig_data["standard_angles"] = standard_angle_records
+        orig_data["manual_angles"] = manual_angle_records
+        orig_data["manual_angle_schema"] = _manual_angle_schema()
+
         p.write_text(json.dumps(orig_data, ensure_ascii=False), encoding="utf-8")
-        status = f"Kaydedildi: {p.name}"
+        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, str(p), original_img_path)
+        status = f"Kaydedildi: {p.name} | aci: {len(standard_angle_records) + len(manual_angle_records)} | aci JSON: {angles_path}"
       except Exception as e:
         return current_payload, f"JSON kaydedilemedi: {e}"
+    else:
+      try:
+        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, "", original_img_path)
+        status = f"Goruntu guncellendi | aci: {len(standard_angle_records) + len(manual_angle_records)} | aci JSON: {angles_path}"
+      except Exception as e:
+        return current_payload, f"Aci JSON kaydedilemedi: {e}"
 
     new_payload, prep_status = _build_editor_payload_from_canvas_kps(
       original_img_path,
       kps_list,
       canvas_scale=canvas_scale,
       idx_to_name=idx_to_name,
+      manual_angles=manual_angle_records,
     )
     if not new_payload:
       return current_payload, f"{status} | Canvas yenilenemedi: {prep_status}"

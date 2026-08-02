@@ -2,6 +2,7 @@ import os
 os.environ["GRADIO_DISABLE_BROTLI"] = "1"
 
 import json
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -21,13 +22,16 @@ from pose_editor import prepare_editor_from_path, apply_and_save_keypoints, crea
 # --- paths ---
 BASE_DIR = Path(__file__).parent
 TEMP_INPUT = BASE_DIR / "temp" / "inputs"
+TEMP_VIDEO_INPUT = BASE_DIR / "temp" / "videos"
 TEMP_OUTPUT = BASE_DIR / "temp" / "outputs"
 TEMP_INPUT.mkdir(parents=True, exist_ok=True)
+TEMP_VIDEO_INPUT.mkdir(parents=True, exist_ok=True)
 TEMP_OUTPUT.mkdir(parents=True, exist_ok=True)
 
 POSE_MODEL = BASE_DIR / "checkpoints" / "vitpose-h-coco_25.pth"
 YOLO_MODEL = BASE_DIR / "checkpoints" / "yolo11x.pt"
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".mpeg", ".mpg", ".m4v"}
 _MODEL_CACHE: Dict[str, Any] = {}
 
 
@@ -57,8 +61,13 @@ def _get_model() -> VitInference:
     return _MODEL_CACHE[cache_key]
 
 
-def _save_outputs(model: VitInference, input_path: Path, frame_keypoints: Dict[Any, Any]) -> Tuple[Path, Path]:
-    run_dir = TEMP_OUTPUT / f"{input_path.stem}_{uuid.uuid4().hex[:10]}"
+def _save_outputs(
+    model: VitInference,
+    input_path: Path,
+    frame_keypoints: Dict[Any, Any],
+    output_dir: Optional[Path] = None,
+) -> Tuple[Path, Path]:
+    run_dir = output_dir or TEMP_OUTPUT / f"{input_path.stem}_{uuid.uuid4().hex[:10]}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     result_image = run_dir / f"{input_path.stem}_result.png"
@@ -77,7 +86,10 @@ def _save_outputs(model: VitInference, input_path: Path, frame_keypoints: Dict[A
     return result_image, result_json
 
 
-def _run_inference_for_input(input_path: Path) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def _run_inference_for_input(
+    input_path: Path,
+    output_dir: Optional[Path] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     if not input_path.exists():
         return None, None, f"Input not found: {input_path}"
 
@@ -90,7 +102,7 @@ def _run_inference_for_input(input_path: Path) -> Tuple[Optional[str], Optional[
     try:
         model = _get_model()
         frame_keypoints = model.inference(img_rgb)
-        result_image, result_json = _save_outputs(model, input_path, frame_keypoints)
+        result_image, result_json = _save_outputs(model, input_path, frame_keypoints, output_dir)
     except Exception as e:
         return None, None, f"Inference error for {input_path.name}: {e}"
 
@@ -101,6 +113,212 @@ def _collect_images_from_directory(folder_path: Path) -> List[Path]:
     return sorted(
         [p for p in folder_path.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS],
         key=lambda p: p.name.lower(),
+    )
+
+
+def _uploaded_file_path(uploaded_file: Any) -> Optional[Path]:
+    if uploaded_file is None:
+        return None
+    if isinstance(uploaded_file, (str, Path)):
+        return Path(uploaded_file)
+    if isinstance(uploaded_file, tuple) and uploaded_file:
+        return Path(uploaded_file[0])
+    file_name = getattr(uploaded_file, "name", None) or getattr(uploaded_file, "path", None)
+    return Path(file_name) if file_name else None
+
+
+def handle_video_upload(video_file: Any) -> Tuple[str, str]:
+    video_path = _uploaded_file_path(video_file)
+    if video_path is None:
+        return "", "Video secilmedi."
+
+    if not video_path.exists():
+        return "", f"Video dosyasi bulunamadi: {video_path}"
+
+    if video_path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_VIDEO_EXTENSIONS))
+        return "", f"Desteklenmeyen video formati: {video_path.suffix}. Desteklenenler: {supported}"
+
+    saved_path = TEMP_VIDEO_INPUT / f"{video_path.stem}_{uuid.uuid4().hex[:10]}{video_path.suffix.lower()}"
+    shutil.copy2(video_path, saved_path)
+
+    capture = cv2.VideoCapture(str(saved_path))
+    if not capture.isOpened():
+        return str(saved_path), f"Video yuklendi ama OpenCV ile okunamadi: {saved_path}"
+
+    fps = capture.get(cv2.CAP_PROP_FPS) or 0
+    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    duration = frame_count / fps if fps > 0 else 0
+    capture.release()
+
+    size_mb = saved_path.stat().st_size / (1024 * 1024)
+    status = [
+        f"Video yuklendi: {saved_path.name}",
+        f"Kayit yolu: {saved_path}",
+        f"Boyut: {size_mb:.2f} MB",
+        f"Cozunurluk: {width}x{height}",
+        f"FPS: {fps:.2f}",
+        f"Frame sayisi: {frame_count}",
+        f"Sure: {duration:.2f} sn",
+    ]
+    return str(saved_path), "\n".join(status)
+
+
+def process_video_frames(
+    video_path_text: str,
+    requested_fps: float,
+    progress=gr.Progress(),
+):
+    video_path_text = (video_path_text or "").strip()
+    if not video_path_text:
+        return (
+            "",
+            [],
+            "Once bir video yukleyin.",
+            [],
+            0,
+            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            "",
+            "",
+            "",
+        )
+
+    video_path = Path(video_path_text)
+    if not video_path.exists():
+        return (
+            "",
+            [],
+            f"Video dosyasi bulunamadi: {video_path}",
+            [],
+            0,
+            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            "",
+            "",
+            "",
+        )
+
+    try:
+        target_fps = float(requested_fps)
+    except (TypeError, ValueError):
+        target_fps = 1.0
+    target_fps = max(0.1, target_fps)
+
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        return (
+            "",
+            [],
+            f"Video OpenCV ile acilamadi: {video_path}",
+            [],
+            0,
+            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            "",
+            "",
+            "",
+        )
+
+    source_fps = capture.get(cv2.CAP_PROP_FPS) or 0
+    if source_fps <= 0:
+        source_fps = target_fps
+    total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    duration = total_frames / source_fps if source_fps > 0 else 0
+
+    run_dir = TEMP_OUTPUT / f"{video_path.stem}_video_{uuid.uuid4().hex[:10]}"
+    raw_frame_dir = run_dir / "raw_frames"
+    pose_output_dir = run_dir / "pose_outputs"
+    raw_frame_dir.mkdir(parents=True, exist_ok=True)
+    pose_output_dir.mkdir(parents=True, exist_ok=True)
+
+    gallery_items = []
+    batch_items: List[Dict[str, str]] = []
+    errors = []
+    selected_count = 0
+    frame_idx = 0
+    next_sample_time = 0.0
+    sample_interval = 1.0 / target_fps
+    runtime_device = _get_runtime_device()
+    t0 = time.perf_counter()
+
+    while True:
+        ok, frame_bgr = capture.read()
+        if not ok:
+            break
+
+        time_sec = frame_idx / source_fps
+        if time_sec + 1e-9 >= next_sample_time:
+            frame_path = raw_frame_dir / f"frame_{frame_idx:06d}_{time_sec:.3f}s.png"
+            cv2.imwrite(str(frame_path), frame_bgr)
+
+            progress(
+                selected_count / max(1, int(duration * target_fps) or 1),
+                desc=f"Frame isleniyor: {frame_idx}",
+            )
+            out_img, json_path, err = _run_inference_for_input(frame_path, pose_output_dir)
+            if err:
+                errors.append(f"Frame {frame_idx}: {err}")
+            elif out_img and json_path:
+                caption = f"frame {frame_idx} | {time_sec:.2f}s"
+                gallery_items.append((out_img, caption))
+                batch_items.append({
+                    "result_image": out_img,
+                    "json_path": json_path,
+                    "source_name": caption,
+                    "original_image": str(frame_path),
+                })
+
+            selected_count += 1
+            next_sample_time += sample_interval
+
+        frame_idx += 1
+
+    capture.release()
+
+    if not gallery_items:
+        error_text = "\n".join(errors) if errors else "Videodan islenebilir frame uretilemedi."
+        return (
+            "",
+            [],
+            error_text,
+            [],
+            0,
+            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            "",
+            "",
+            "",
+        )
+
+    elapsed = time.perf_counter() - t0
+    first_item = batch_items[0]
+    first_payload, _ = prepare_editor_from_path(first_item["original_image"], first_item["json_path"])
+    nav_status = _batch_nav_state_text(0, len(batch_items), first_item["source_name"])
+    status_lines = [
+        f"Video islendi: {video_path.name}",
+        f"Kaynak FPS: {source_fps:.2f}",
+        f"Istenen FPS: {target_fps:.2f}",
+        f"Toplam frame: {total_frames}",
+        f"Secilen frame: {selected_count}",
+        f"Basarili frame: {len(gallery_items)}",
+        f"Hatali frame: {len(errors)}",
+        f"Device: {runtime_device}",
+        f"Cikti klasoru: {run_dir}",
+        f"Toplam sure: {elapsed:.2f}s",
+    ]
+    if errors:
+        status_lines.append("\nHatalar:")
+        status_lines.extend(errors)
+
+    return (
+        first_payload,
+        gallery_items,
+        "\n".join(status_lines),
+        batch_items,
+        0,
+        gr.update(value=1, minimum=1, maximum=len(batch_items), visible=True),
+        nav_status,
+        first_item["original_image"],
+        first_item["json_path"],
     )
 
 
@@ -357,10 +575,51 @@ with gr.Blocks() as demo:
     )
     batch_nav_status = gr.Textbox(label="Batch Navigation", lines=1, interactive=False)
 
+    # Video upload block - placed before JSON overlay tools.
+    gr.Markdown("### Video Yukleme")
+    with gr.Column():
+        input_video = gr.Video(
+            label="Video Yukle",
+            sources=["upload"],
+            interactive=True,
+            height=260,
+        )
+        video_fps = gr.Dropdown(
+            choices=[1, 5, 10],
+            value=1,
+            label="Frame Cikarma Hizi (kare/sn)",
+        )
+        process_video_btn = gr.Button("Videodan Frame Cikar ve ViTPose Calistir", variant="primary")
+        video_path_box = gr.Textbox(label="Uploaded Video Path", lines=2, interactive=False)
+        video_status = gr.Textbox(label="Video Status", lines=7, interactive=False)
+        video_gallery = gr.Gallery(label="Video Frame Overlay Results", columns=4, height=280)
+
     # State
     batch_items_state  = gr.State([])
     batch_index_state  = gr.State(0)
     original_img_state = gr.State("")
+
+    input_video.upload(
+        fn=handle_video_upload,
+        inputs=[input_video],
+        outputs=[video_path_box, video_status],
+    )
+
+    process_video_btn.click(
+        fn=process_video_frames,
+        inputs=[video_path_box, video_fps],
+        outputs=[
+            pose_editor_html,
+            video_gallery,
+            video_status,
+            batch_items_state,
+            batch_index_state,
+            batch_slider,
+            batch_nav_status,
+            original_img_state,
+            json_path_box,
+        ],
+    )
 
     # ── Callbacks ────────────────────────────────────────────────────────────
     _NAV_OUTPUTS = [
