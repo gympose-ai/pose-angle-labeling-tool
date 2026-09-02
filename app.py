@@ -751,4 +751,4 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(css=_CSS)
+     demo.launch(css=_CSS)
