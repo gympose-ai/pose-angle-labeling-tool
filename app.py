@@ -2,7 +2,6 @@ import os
 os.environ["GRADIO_DISABLE_BROTLI"] = "1"
 
 import json
-import shutil
 import time
 import uuid
 from pathlib import Path
@@ -127,6 +126,12 @@ def _uploaded_file_path(uploaded_file: Any) -> Optional[Path]:
     return Path(file_name) if file_name else None
 
 
+def _safe_folder_name(name: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name.strip())
+    safe = "_".join(part for part in safe.split("_") if part)
+    return safe[:90] or "video"
+
+
 def handle_video_upload(video_file: Any) -> Tuple[str, str]:
     video_path = _uploaded_file_path(video_file)
     if video_path is None:
@@ -139,12 +144,9 @@ def handle_video_upload(video_file: Any) -> Tuple[str, str]:
         supported = ", ".join(sorted(SUPPORTED_VIDEO_EXTENSIONS))
         return "", f"Desteklenmeyen video formati: {video_path.suffix}. Desteklenenler: {supported}"
 
-    saved_path = TEMP_VIDEO_INPUT / f"{video_path.stem}_{uuid.uuid4().hex[:10]}{video_path.suffix.lower()}"
-    shutil.copy2(video_path, saved_path)
-
-    capture = cv2.VideoCapture(str(saved_path))
+    capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
-        return str(saved_path), f"Video yuklendi ama OpenCV ile okunamadi: {saved_path}"
+        return str(video_path), f"Video yuklendi ama OpenCV ile okunamadi: {video_path}"
 
     fps = capture.get(cv2.CAP_PROP_FPS) or 0
     frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -153,17 +155,18 @@ def handle_video_upload(video_file: Any) -> Tuple[str, str]:
     duration = frame_count / fps if fps > 0 else 0
     capture.release()
 
-    size_mb = saved_path.stat().st_size / (1024 * 1024)
+    size_mb = video_path.stat().st_size / (1024 * 1024)
     status = [
-        f"Video yuklendi: {saved_path.name}",
-        f"Kayit yolu: {saved_path}",
+        f"Video secildi: {video_path.name}",
+        f"Kaynak video yolu: {video_path}",
+        "Video temp/videos altina kopyalanmayacak; sadece pose cikarimli resimler kaydedilecek.",
         f"Boyut: {size_mb:.2f} MB",
         f"Cozunurluk: {width}x{height}",
         f"FPS: {fps:.2f}",
         f"Frame sayisi: {frame_count}",
         f"Sure: {duration:.2f} sn",
     ]
-    return str(saved_path), "\n".join(status)
+    return str(video_path), "\n".join(status)
 
 
 def process_video_frames(
@@ -225,11 +228,12 @@ def process_video_frames(
     total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     duration = total_frames / source_fps if source_fps > 0 else 0
 
-    run_dir = TEMP_OUTPUT / f"{video_path.stem}_video_{uuid.uuid4().hex[:10]}"
-    raw_frame_dir = run_dir / "raw_frames"
-    pose_output_dir = run_dir / "pose_outputs"
-    raw_frame_dir.mkdir(parents=True, exist_ok=True)
-    pose_output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    run_dir = TEMP_VIDEO_INPUT / f"{timestamp}_{_safe_folder_name(video_path.stem)}"
+    if run_dir.exists():
+        run_dir = TEMP_VIDEO_INPUT / f"{timestamp}_{_safe_folder_name(video_path.stem)}_{uuid.uuid4().hex[:6]}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    raw_frame_dir = run_dir / "_raw_frames"
 
     gallery_items = []
     batch_items: List[Dict[str, str]] = []
@@ -249,24 +253,29 @@ def process_video_frames(
         time_sec = frame_idx / source_fps
         if time_sec + 1e-9 >= next_sample_time:
             frame_path = raw_frame_dir / f"frame_{frame_idx:06d}_{time_sec:.3f}s.png"
+            raw_frame_dir.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(frame_path), frame_bgr)
 
             progress(
                 selected_count / max(1, int(duration * target_fps) or 1),
                 desc=f"Frame isleniyor: {frame_idx}",
             )
-            out_img, json_path, err = _run_inference_for_input(frame_path, pose_output_dir)
+            out_img, json_path, err = _run_inference_for_input(frame_path, run_dir)
             if err:
                 errors.append(f"Frame {frame_idx}: {err}")
             elif out_img and json_path:
                 caption = f"frame {frame_idx} | {time_sec:.2f}s"
                 gallery_items.append((out_img, caption))
-                batch_items.append({
-                    "result_image": out_img,
-                    "json_path": json_path,
-                    "source_name": caption,
-                    "original_image": str(frame_path),
-                })
+                has_pose, pose_error = _has_pose_keypoints(json_path)
+                if has_pose:
+                    batch_items.append({
+                        "result_image": out_img,
+                        "json_path": json_path,
+                        "source_name": caption,
+                        "original_image": str(frame_path),
+                    })
+                else:
+                    errors.append(f"{caption}: {pose_error}")
 
             selected_count += 1
             next_sample_time += sample_interval
@@ -290,9 +299,9 @@ def process_video_frames(
         )
 
     elapsed = time.perf_counter() - t0
-    first_item = batch_items[0]
-    first_payload, _ = prepare_editor_from_path(first_item["original_image"], first_item["json_path"])
-    nav_status = _batch_nav_state_text(0, len(batch_items), first_item["source_name"])
+    first_item = batch_items[0] if batch_items else None
+    first_payload, _ = prepare_editor_from_path(first_item["original_image"], first_item["json_path"]) if first_item else ("", "")
+    nav_status = _batch_nav_state_text(0, len(batch_items), first_item["source_name"]) if first_item else "Pose tespit edilen frame yok."
     status_lines = [
         f"Video islendi: {video_path.name}",
         f"Kaynak FPS: {source_fps:.2f}",
@@ -303,6 +312,7 @@ def process_video_frames(
         f"Hatali frame: {len(errors)}",
         f"Device: {runtime_device}",
         f"Cikti klasoru: {run_dir}",
+        f"Pose cikarimli resimler ve JSON dosyalari bu klasore kaydedildi.",
         f"Toplam sure: {elapsed:.2f}s",
     ]
     if errors:
@@ -315,10 +325,10 @@ def process_video_frames(
         "\n".join(status_lines),
         batch_items,
         0,
-        gr.update(value=1, minimum=1, maximum=len(batch_items), visible=True),
+        gr.update(value=1, minimum=1, maximum=max(1, len(batch_items)), visible=bool(batch_items)),
         nav_status,
-        first_item["original_image"],
-        first_item["json_path"],
+        first_item["original_image"] if first_item else "",
+        first_item["json_path"] if first_item else "",
     )
 
 
@@ -347,6 +357,26 @@ def _show_batch_item(batch_items: List[Dict[str, str]], index: int):
     )
 
 
+def _has_pose_keypoints(json_path: str) -> Tuple[bool, str]:
+    try:
+        data = json.loads(Path(json_path).read_text(encoding="utf-8"))
+        kp_outer = data.get("keypoints", [])
+        if not kp_outer or not isinstance(kp_outer, list):
+            return False, "JSON'da keypoints yok"
+        person_dict = kp_outer[0]
+        if not isinstance(person_dict, dict) or not person_dict:
+            return False, "pose/person tespit edilemedi"
+        kp_list = person_dict.get("0")
+        if kp_list is None:
+            kp_list = person_dict[next(iter(person_dict.keys()))]
+        if not isinstance(kp_list, list) or len(kp_list) != 25:
+            count = len(kp_list) if isinstance(kp_list, list) else "gecersiz"
+            return False, f"beklenen 25 keypoint, gelen: {count}"
+        return True, ""
+    except Exception as e:
+        return False, f"JSON okunamadi: {e}"
+
+
 def show_prev_batch(batch_items: List[Dict[str, str]], current_idx: int):
     return _show_batch_item(batch_items, current_idx - 1)
 
@@ -373,6 +403,22 @@ def run_vitpose(image: Image.Image, folder_path: str):
         out_img, json_path, err = _run_inference_for_input(input_path)
         if err:
             return "", [], err, [], 0, gr.update(value=1, minimum=1, maximum=1, visible=False), gr.update(), gr.update(), "", ""
+
+        has_pose, pose_error = _has_pose_keypoints(json_path)
+        if not has_pose:
+            elapsed = time.perf_counter() - t0
+            return (
+                "",
+                [(out_img, input_path.name)] if out_img else [],
+                f"{json_path}\nPose tespit edilemedi: {pose_error}\nDevice: {runtime_device} | Time: {elapsed:.2f}s",
+                [],
+                0,
+                gr.update(value=1, minimum=1, maximum=1, visible=False),
+                gr.update(),
+                gr.update(),
+                "Tek goruntu modu: pose yok.",
+                str(input_path),
+            )
 
         editor_payload, _ = prepare_editor_from_path(str(input_path), json_path)
         elapsed = time.perf_counter() - t0
@@ -417,12 +463,16 @@ def run_vitpose(image: Image.Image, folder_path: str):
                 first_result = out_img
             gallery_items.append((out_img, img_path.name))
             if json_path:
-                batch_items.append({
-                    "result_image": out_img,
-                    "json_path": json_path,
-                    "source_name": img_path.name,
-                    "original_image": str(img_path),
-                })
+                has_pose, pose_error = _has_pose_keypoints(json_path)
+                if has_pose:
+                    batch_items.append({
+                        "result_image": out_img,
+                        "json_path": json_path,
+                        "source_name": img_path.name,
+                        "original_image": str(img_path),
+                    })
+                else:
+                    errors.append(f"{img_path.name}: {pose_error}")
 
         if json_path:
             json_paths.append(json_path)
@@ -448,7 +498,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
         status_lines.append("\nHatalar:")
         status_lines.extend(errors)
 
-    nav_status = _batch_nav_state_text(0, len(batch_items), batch_items[0]["source_name"]) if batch_items else ""
+    nav_status = _batch_nav_state_text(0, len(batch_items), batch_items[0]["source_name"]) if batch_items else "Pose tespit edilen goruntu yok."
     first_original = batch_items[0]["original_image"] if batch_items else ""
     first_json     = batch_items[0]["json_path"]      if batch_items else ""
     first_payload, _ = prepare_editor_from_path(first_original, first_json) if first_original else ("", "")
@@ -458,7 +508,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
         "\n".join(status_lines),
         batch_items,
         0,
-        gr.update(value=1, minimum=1, maximum=len(batch_items), visible=bool(batch_items)),
+        gr.update(value=1, minimum=1, maximum=max(1, len(batch_items)), visible=bool(batch_items)),
         gr.update(),
         gr.update(),
         nav_status,
@@ -482,6 +532,8 @@ def parse_pose_json(data: Dict[str, Any]) -> Tuple[Dict[int, str], List[Tuple[fl
         raise ValueError("JSON'da 'keypoints' bulunamadı veya format hatalı.")
 
     person_dict = kp_outer[0]
+    if not isinstance(person_dict, dict) or not person_dict:
+        raise ValueError("JSON'da tespit edilmis kisi/keypoint yok.")
     if "0" not in person_dict:
         # fallback: ilk key'i al
         first_key = next(iter(person_dict.keys()))

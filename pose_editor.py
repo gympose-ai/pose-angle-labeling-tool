@@ -23,19 +23,20 @@ from easy_ViTPose.vit_utils.visualization import draw_points_and_skeleton, joint
 
 _CANVAS_MAX_PX = 1200
 _ANGLE_OUTPUT_DIR = Path(__file__).parent / "temp" / "açılar"
+_ANGLE_CONFIDENCE_THRESHOLD = 0.01
 _STANDARD_ANGLE_DEFINITIONS = [
-    (8, 6, 12, "R.Omuz"),
-    (9, 7, 13, "L.Omuz"),
-    (6, 8, 10, "R.Dirsek"),
-    (7, 9, 11, "L.Dirsek"),
-    (6, 12, 14, "R.Kalca"),
-    (7, 13, 15, "L.Kalca"),
-    (12, 14, 16, "R.Diz"),
-    (13, 15, 17, "L.Diz"),
-    (14, 16, 18, "R.AyakBilegi"),
-    (15, 17, 21, "L.AyakBilegi"),
-    (20, 16, 18, "R.AyakYonu"),
-    (23, 17, 21, "L.AyakYonu"),
+    (9, 7, 13, "R.Omuz"),
+    (8, 6, 12, "L.Omuz"),
+    (7, 9, 11, "R.Dirsek"),
+    (6, 8, 10, "L.Dirsek"),
+    (7, 13, 16, "R.Kalca"),
+    (6, 12, 15, "L.Kalca"),
+    (13, 16, 18, "R.Diz"),
+    (12, 15, 17, "L.Diz"),
+    (16, 18, 22, "R.AyakBilegi"),
+    (15, 17, 19, "L.AyakBilegi"),
+    (24, 18, 22, "R.AyakYonu"),
+    (21, 17, 19, "L.AyakYonu"),
 ]
 
 # ── HTML template ────────────────────────────────────────────────────────────
@@ -210,6 +211,14 @@ function bootEditor() {
 
   function kpC(i) { return 'hsl(' + Math.round(i / keypoints.length * 300) + ',80%,55%)'; }
   function skC(i) { return 'hsl(' + Math.round(i / skeleton.length  * 300) + ',70%,50%)'; }
+  var ANGLE_CONF_THR = 0.01;
+
+  function validAngleKeypoint(kp) {
+    return kp &&
+      Number.isFinite(kp.x) && Number.isFinite(kp.y) &&
+      kp.c >= ANGLE_CONF_THR &&
+      !(Math.abs(kp.x) < 1e-6 && Math.abs(kp.y) < 1e-6);
+  }
 
   function editorStatePayload() {
     return {
@@ -308,31 +317,31 @@ function bootEditor() {
     if (!showAngles) return;
     /* [idxA, idxB(vertex), idxC, label]  — standard COCO-25 indices */
     var ANG = [
-      [8,  6,  12, 'R.Omuz'],
-      [9,  7,  13, 'L.Omuz'],
-      [6,  8,  10, 'R.Dirsek'],
-      [7,  9,  11, 'L.Dirsek'],
-      [6,  12, 14, 'R.Kalca'],
-      [7,  13, 15, 'L.Kalca'],
-      [12, 14, 16, 'R.Diz'],
-      [13, 15, 17, 'L.Diz'],
-      [14, 16, 18, 'R.AyakBilegi'],
-      [15, 17, 21, 'L.AyakBilegi'],
-      [20, 16, 18, 'R.AyakYonu'],
-      [23, 17, 21, 'L.AyakYonu']
+      [9,  7,  13, 'R.Omuz'],
+      [8,  6,  12, 'L.Omuz'],
+      [7,  9,  11, 'R.Dirsek'],
+      [6,  8,  10, 'L.Dirsek'],
+      [7,  13, 16, 'R.Kalca'],
+      [6,  12, 15, 'L.Kalca'],
+      [13, 16, 18, 'R.Diz'],
+      [12, 15, 17, 'L.Diz'],
+      [16, 18, 22, 'R.AyakBilegi'],
+      [15, 17, 19, 'L.AyakBilegi'],
+      [24, 18, 22, 'R.AyakYonu'],
+      [21, 17, 19, 'L.AyakYonu']
     ];
     ctx.save();
     for (var ai = 0; ai < ANG.length; ai++) {
       var ia = ANG[ai][0], ib = ANG[ai][1], ic = ANG[ai][2];
       if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) continue;
       var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
-      if (!ka || !kb || !kc || ka.c < 0.1 || kb.c < 0.1 || kc.c < 0.1) continue;
+      if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) continue;
       var ang = calcAngle(ka, kb, kc);
       if (ang === null) continue;
 
       var dA   = Math.sqrt((ka.x-kb.x)*(ka.x-kb.x) + (ka.y-kb.y)*(ka.y-kb.y));
       var dC   = Math.sqrt((kc.x-kb.x)*(kc.x-kb.x) + (kc.y-kb.y)*(kc.y-kb.y));
-      var arcR = Math.max(12, Math.min(30, Math.min(dA, dC) * 0.35));
+      var arcR = Math.max(12 / zoom, Math.min(30 / zoom, Math.min(dA, dC) * 0.35));
 
       var angA = Math.atan2(ka.y - kb.y, ka.x - kb.x);
       var angC = Math.atan2(kc.y - kb.y, kc.x - kb.x);
@@ -345,18 +354,18 @@ function bootEditor() {
       ctx.beginPath();
       ctx.arc(kb.x, kb.y, arcR, angA, angC, diff < 0);
       ctx.strokeStyle = 'rgba(255,50,50,0.95)';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2 / zoom;
       ctx.stroke();
 
       /* Dashed radii from vertex */
-      ctx.setLineDash([4, 3]);
+      ctx.setLineDash([4 / zoom, 3 / zoom]);
       ctx.beginPath();
       ctx.moveTo(kb.x, kb.y);
       ctx.lineTo(kb.x + arcR * Math.cos(angA), kb.y + arcR * Math.sin(angA));
       ctx.moveTo(kb.x, kb.y);
       ctx.lineTo(kb.x + arcR * Math.cos(angC), kb.y + arcR * Math.sin(angC));
       ctx.strokeStyle = 'rgba(255,50,50,0.6)';
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1.5 / zoom;
       ctx.stroke();
       ctx.setLineDash([]);
 
@@ -364,10 +373,10 @@ function bootEditor() {
       var mvx = (ka.x - kb.x) / (dA || 1) + (kc.x - kb.x) / (dC || 1);
       var mvy = (ka.y - kb.y) / (dA || 1) + (kc.y - kb.y) / (dC || 1);
       var mv  = Math.sqrt(mvx * mvx + mvy * mvy) || 1;
-      var tx  = kb.x + (arcR + 18) * mvx / mv;
-      var ty  = kb.y + (arcR + 18) * mvy / mv;
-      ctx.font      = 'bold 13px sans-serif';
-      ctx.lineWidth = 3;
+      var tx  = kb.x + (arcR + 18 / zoom) * mvx / mv;
+      var ty  = kb.y + (arcR + 18 / zoom) * mvy / mv;
+      ctx.font      = 'bold ' + (13 / zoom) + 'px sans-serif';
+      ctx.lineWidth = 3 / zoom;
       ctx.strokeStyle = 'rgba(0,0,0,0.85)';
       ctx.strokeText(ang + '\u00b0', tx, ty);
       ctx.fillStyle = '#FF3333';
@@ -376,7 +385,7 @@ function bootEditor() {
       angleHitboxes.push({
         x: tx,
         y: ty,
-        r: Math.max(24, arcR + 14),
+        r: Math.max(24 / zoom, arcR + 14 / zoom),
         label: ANG[ai][3],
         angle: ang,
         points: [
@@ -403,7 +412,7 @@ function bootEditor() {
   function drawCustomAngle(ia, ib, ic, label) {
     if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) return;
     var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
-    if (!ka || !kb || !kc || ka.c < 0.1 || kb.c < 0.1 || kc.c < 0.1) return;
+    if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) return;
     var ang = calcAngle(ka, kb, kc);
     if (ang === null) return;
 
@@ -1142,7 +1151,11 @@ def prepare_editor_from_path(
     if not kp_outer:
         return "", "JSON'da 'keypoints' bulunamadi."
     person_dict = kp_outer[0]
-    kp_list = person_dict.get("0") or person_dict[next(iter(person_dict.keys()))]
+    if not isinstance(person_dict, dict) or not person_dict:
+        return "", "JSON'da tespit edilmis kisi/keypoint yok."
+    kp_list = person_dict.get("0")
+    if kp_list is None:
+        kp_list = person_dict[next(iter(person_dict.keys()))]
     if len(kp_list) != 25:
         return "", f"Beklenen 25 keypoint, gelen: {len(kp_list)}"
     # kp_list: [[row, col, c], ...]  (model output is y,x,c order)
@@ -1199,6 +1212,8 @@ def _calc_angle_degrees_from_rc(kps_rc: list, ia: int, ib: int, ic: int) -> Opti
         a = kps_rc[ia]
         b = kps_rc[ib]
         c = kps_rc[ic]
+        if not (_valid_angle_keypoint_rc(a) and _valid_angle_keypoint_rc(b) and _valid_angle_keypoint_rc(c)):
+            return None
         bax = float(a[1]) - float(b[1])
         bay = float(a[0]) - float(b[0])
         bcx = float(c[1]) - float(b[1])
@@ -1211,6 +1226,21 @@ def _calc_angle_degrees_from_rc(kps_rc: list, ia: int, ib: int, ic: int) -> Opti
         return round(float(np.degrees(np.arccos(cosang))), 3)
     except Exception:
         return None
+
+
+def _valid_angle_keypoint_rc(kp: Any) -> bool:
+    try:
+        y = float(kp[0])
+        x = float(kp[1])
+        conf = float(kp[2])
+    except Exception:
+        return False
+    return (
+        np.isfinite(y)
+        and np.isfinite(x)
+        and conf >= _ANGLE_CONFIDENCE_THRESHOLD
+        and not (abs(x) < 1e-6 and abs(y) < 1e-6)
+    )
 
 
 def _manual_angle_indices(raw_angle: Any) -> Optional[list]:
@@ -1250,6 +1280,8 @@ def _build_manual_angle_records(
 
         ia, ib, ic = indices
         angle_degrees = _calc_angle_degrees_from_rc(kps_rc, ia, ib, ic)
+        if angle_degrees is None:
+            continue
         names = [idx_to_name.get(i, str(i)) for i in indices]
         records.append({
             "label": f"manual_angle_{len(records) + 1}",
@@ -1286,9 +1318,9 @@ def _build_standard_angle_records(
     for ia, ib, ic, label in _STANDARD_ANGLE_DEFINITIONS:
         if ia >= len(kps_rc) or ib >= len(kps_rc) or ic >= len(kps_rc):
             continue
-        if float(kps_rc[ia][2]) < 0.1 or float(kps_rc[ib][2]) < 0.1 or float(kps_rc[ic][2]) < 0.1:
-            continue
         angle_degrees = _calc_angle_degrees_from_rc(kps_rc, ia, ib, ic)
+        if angle_degrees is None:
+            continue
         names = [idx_to_name.get(i, str(i)) for i in (ia, ib, ic)]
         records.append({
             "label": label,
