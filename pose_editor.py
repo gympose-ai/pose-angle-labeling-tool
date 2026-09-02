@@ -52,6 +52,7 @@ EDITOR_HTML_TEMPLATE = """
     <button class="pe-btn pe-save"   data-action="save">&#128190; Save PNG</button>
     <button class="pe-btn pe-angles" data-action="angles">&#128208; A&#231;&#305;lar</button>
     <button class="pe-btn pe-custom-angle" data-action="custom-angle">&#8736; &#214;zel A&#231;&#305;</button>
+    <button class="pe-btn pe-delete-angle" data-action="delete-angle">&#9003; A&#231;&#305; Sil</button>
     <button class="pe-btn pe-fullscreen" data-action="fullscreen">&#x2922; Tam Ekran</button>
     <button class="pe-btn pe-keypoints" data-action="keypoints">&#x25CF; Noktalar</button>
     <span class="pe-info">Goruntu yukleniyor...</span>
@@ -84,6 +85,8 @@ EDITOR_CSS_TEMPLATE = """
 .pe-angles { background: #27ae60; }
 .pe-custom-angle { background: #16a085; }
 .pe-custom-angle.is-active { outline: 2px solid #fff; box-shadow: 0 0 0 2px rgba(22,160,133,.45); }
+.pe-delete-angle { background: #b83280; }
+.pe-delete-angle.is-active { outline: 2px solid #fff; box-shadow: 0 0 0 2px rgba(184,50,128,.45); }
 .pe-fullscreen { background: #e67e22; }
 .pe-keypoints { background: #d35400; }
 .pe-info   { font-size: 12px; color: #aaa; font-family: monospace; }
@@ -173,6 +176,11 @@ function bootEditor() {
   var angleHitboxes = [];
   var customAngleMode = false;
   var customAnglePick = [];
+  var deleteAngleMode = false;
+  var deletedStandardAngles = {};
+  (DATA.deleted_standard_angles || []).forEach(function(label) {
+    deletedStandardAngles[String(label)] = true;
+  });
   var customAngles = (DATA.manual_angles || []).map(function(a) {
     var pts = Array.isArray(a) ? a : (a.keypoint_indices || a.points || []);
     return [Number(pts[0]), Number(pts[1]), Number(pts[2])];
@@ -226,6 +234,7 @@ function bootEditor() {
       orig_keypoints: origKps,
       canvas_scale: csScale,
       show_standard_angles: showAngles,
+      deleted_standard_angles: Object.keys(deletedStandardAngles),
       manual_angles: customAngles.map(function(a) {
         return { keypoint_indices: [a[0], a[1], a[2]] };
       })
@@ -333,6 +342,7 @@ function bootEditor() {
     ctx.save();
     for (var ai = 0; ai < ANG.length; ai++) {
       var ia = ANG[ai][0], ib = ANG[ai][1], ic = ANG[ai][2];
+      if (deletedStandardAngles[ANG[ai][3]]) continue;
       if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) continue;
       var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
       if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) continue;
@@ -388,6 +398,9 @@ function bootEditor() {
         r: Math.max(24 / zoom, arcR + 14 / zoom),
         label: ANG[ai][3],
         angle: ang,
+        source: 'standard',
+        standard_label: ANG[ai][3],
+        custom_index: null,
         points: [
           nameForKeypoint(ia) + ' [' + ia + ']',
           nameForKeypoint(ib) + ' [' + ib + ']',
@@ -404,12 +417,12 @@ function bootEditor() {
     ctx.save();
     for (var ai = 0; ai < customAngles.length; ai++) {
       var def = customAngles[ai];
-      drawCustomAngle(def[0], def[1], def[2], 'Ozel Aci ' + (ai + 1));
+      drawCustomAngle(def[0], def[1], def[2], 'Ozel Aci ' + (ai + 1), ai);
     }
     ctx.restore();
   }
 
-  function drawCustomAngle(ia, ib, ic, label) {
+  function drawCustomAngle(ia, ib, ic, label, customIndex) {
     if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) return;
     var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
     if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) return;
@@ -462,6 +475,9 @@ function bootEditor() {
       r: Math.max(24 / zoom, arcR + 14 / zoom),
       label: label,
       angle: ang,
+      source: 'manual',
+      standard_label: null,
+      custom_index: customIndex,
       points: [
         nameForKeypoint(ia) + ' [' + ia + ']',
         nameForKeypoint(ib) + ' [' + ib + ']',
@@ -624,6 +640,7 @@ function bootEditor() {
 
   function setCustomAngleMode(active) {
     customAngleMode = active;
+    if (customAngleMode) setDeleteAngleMode(false);
     customAnglePick = [];
     if (customAngleMode) showKeypoints = true;
     var btn = element.querySelector('[data-action="custom-angle"]');
@@ -635,6 +652,42 @@ function bootEditor() {
         ? 'Ozel aci: 1. nokta, merkez nokta, 3. nokta seklinde secin.'
         : 'Ozel aci secimi kapatildi.';
     }
+  }
+
+  function setDeleteAngleMode(active) {
+    deleteAngleMode = active;
+    if (deleteAngleMode) {
+      customAngleMode = false;
+      customAnglePick = [];
+      showAngles = true;
+    }
+    var deleteBtn = element.querySelector('[data-action="delete-angle"]');
+    if (deleteBtn) deleteBtn.classList.toggle('is-active', deleteAngleMode);
+    var customBtn = element.querySelector('[data-action="custom-angle"]');
+    if (customBtn) customBtn.classList.toggle('is-active', customAngleMode);
+    canvas.style.cursor = deleteAngleMode ? 'not-allowed' : (customAngleMode ? 'copy' : 'crosshair');
+    render();
+    if (info) {
+      info.textContent = deleteAngleMode
+        ? 'Aci silme: silmek istediginiz acinin yazisina veya yayina tiklayin.'
+        : 'Aci silme kapatildi.';
+    }
+  }
+
+  function deleteHoveredAngle(hit) {
+    if (!hit) {
+      if (info) info.textContent = 'Silmek icin once bir acinin uzerine tiklayin.';
+      return;
+    }
+    if (hit.source === 'manual' && hit.custom_index !== null) {
+      customAngles.splice(hit.custom_index, 1);
+    } else if (hit.source === 'standard' && hit.standard_label) {
+      deletedStandardAngles[hit.standard_label] = true;
+    }
+    hoveredAngle = null;
+    render();
+    emitKeypointsToHiddenOutput();
+    if (info) info.textContent = hit.label + ' silindi. Kaydetmek icin Apply & Save kullanin.';
   }
 
   function pickCustomAngleKeypoint(idx) {
@@ -717,6 +770,10 @@ function bootEditor() {
       canvas.style.cursor = 'move';
       return;
     }
+    if (deleteAngleMode && e.button === 0) {
+      deleteHoveredAngle(findHoveredAngle(getPos(e)));
+      return;
+    }
     var kpIdx = nearest(getPos(e));
     if (customAngleMode && e.button === 0) {
       if (kpIdx !== null) {
@@ -757,7 +814,9 @@ function bootEditor() {
         hoveredAngle = nextHoveredAngle;
         render();
       }
-      canvas.style.cursor = nearest(p) !== null ? (customAngleMode ? 'copy' : 'grab') : (hoveredAngle ? 'help' : (zoom > 1 ? 'zoom-in' : 'crosshair'));
+      canvas.style.cursor = deleteAngleMode
+        ? (hoveredAngle ? 'not-allowed' : 'crosshair')
+        : (nearest(p) !== null ? (customAngleMode ? 'copy' : 'grab') : (hoveredAngle ? 'help' : (zoom > 1 ? 'zoom-in' : 'crosshair')));
       return;
     }
     hoveredAngle = null;
@@ -785,6 +844,10 @@ function bootEditor() {
     var touched = nearest(getPos(e));
     if (customAngleMode) {
       if (touched !== null) pickCustomAngleKeypoint(touched);
+      return;
+    }
+    if (deleteAngleMode) {
+      deleteHoveredAngle(findHoveredAngle(getPos(e)));
       return;
     }
     dragging = touched;
@@ -835,6 +898,10 @@ function bootEditor() {
     zoom = 1.0; panX = 0; panY = 0;
     customAnglePick = [];
     customAngles = [];
+    deletedStandardAngles = {};
+    deleteAngleMode = false;
+    var deleteBtn = element.querySelector('[data-action="delete-angle"]');
+    if (deleteBtn) deleteBtn.classList.remove('is-active');
     render();
     emitKeypointsToHiddenOutput();
     if (info) info.textContent = 'Orijinal konumlar ve zoom sifirlandi.';
@@ -861,6 +928,10 @@ function bootEditor() {
 
   rebind('[data-action="custom-angle"]', function() {
     setCustomAngleMode(!customAngleMode);
+  });
+
+  rebind('[data-action="delete-angle"]', function() {
+    setDeleteAngleMode(!deleteAngleMode);
   });
 
   rebind('[data-action="fullscreen"]', function() {
@@ -994,6 +1065,7 @@ def prepare_editor(
         "nm":  kp_names,
         "cs":  cs,
         "manual_angles": data.get("manual_angles", []),
+        "deleted_standard_angles": data.get("deleted_standard_angles", []),
     }, separators=(",", ":"))
 
     value = base64.b64encode(payload.encode("utf-8")).decode("ascii")
@@ -1313,9 +1385,13 @@ def _build_manual_angle_records(
 def _build_standard_angle_records(
     kps_rc: list,
     idx_to_name: Dict[int, str],
+    deleted_standard_angles: Optional[list] = None,
 ) -> list:
     records = []
+    deleted_labels = {str(label) for label in (deleted_standard_angles or [])}
     for ia, ib, ic, label in _STANDARD_ANGLE_DEFINITIONS:
+        if label in deleted_labels:
+            continue
         if ia >= len(kps_rc) or ib >= len(kps_rc) or ic >= len(kps_rc):
             continue
         angle_degrees = _calc_angle_degrees_from_rc(kps_rc, ia, ib, ic)
@@ -1371,6 +1447,7 @@ def _save_angles_sidecar_json(
     standard_angle_records: list,
     source_json_path: str,
     original_img_path: str,
+    deleted_standard_angles: Optional[list] = None,
 ) -> Optional[Path]:
     """Write manual angle records to easy_ViTPose/temp/açılar as a separate JSON file."""
     _ANGLE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1390,6 +1467,7 @@ def _save_angles_sidecar_json(
         "angles": standard_angle_records + manual_angle_records,
         "standard_angles": standard_angle_records,
         "manual_angles": manual_angle_records,
+        "deleted_standard_angles": deleted_standard_angles or [],
     }
     out_path.write_text(json.dumps(out_data, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_path
@@ -1400,6 +1478,7 @@ def _build_editor_payload_from_kps(
     kps_rc: list,
     idx_to_name: Optional[Dict[int, str]] = None,
     manual_angles: Optional[list] = None,
+    deleted_standard_angles: Optional[list] = None,
 ) -> Tuple[str, str]:
     """Create editor payload directly from (row, col, conf) keypoints."""
     img_path = Path((original_img_path or "").strip())
@@ -1424,6 +1503,7 @@ def _build_editor_payload_from_kps(
         "nm": kp_names,
         "cs": cs,
         "manual_angles": manual_angles or [],
+        "deleted_standard_angles": deleted_standard_angles or [],
     }, separators=(",", ":"))
 
     return base64.b64encode(payload.encode("utf-8")).decode("ascii"), "OK"
@@ -1435,6 +1515,7 @@ def _build_editor_payload_from_canvas_kps(
     canvas_scale: float,
     idx_to_name: Optional[Dict[int, str]] = None,
     manual_angles: Optional[list] = None,
+    deleted_standard_angles: Optional[list] = None,
 ) -> Tuple[str, str]:
     """Create editor payload from current canvas-space keypoints (x, y, c)."""
     img_path = Path((original_img_path or "").strip())
@@ -1468,6 +1549,7 @@ def _build_editor_payload_from_canvas_kps(
       "nm": kp_names,
       "cs": cs,
       "manual_angles": manual_angles or [],
+      "deleted_standard_angles": deleted_standard_angles or [],
     }, separators=(",", ":"))
 
     return base64.b64encode(payload.encode("utf-8")).decode("ascii"), "OK"
@@ -1505,6 +1587,10 @@ def apply_and_save_keypoints(
     kps_list = payload["keypoints"]
     canvas_scale = float(payload.get("canvas_scale", 1.0))
     raw_manual_angles = payload.get("manual_angles", [])
+    deleted_standard_angles = [
+      str(label) for label in payload.get("deleted_standard_angles", [])
+      if str(label)
+    ]
     save_standard_angles = bool(payload.get("show_standard_angles", False))
 
     # Convert canvas coords -> image coords (row, col, c)
@@ -1522,7 +1608,7 @@ def apply_and_save_keypoints(
     json_path = _extract_existing_json_path(json_path_str or "")
 
     manual_angle_records = _build_manual_angle_records(raw_manual_angles, kps_for_json, idx_to_name)
-    standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name) if save_standard_angles else []
+    standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name, deleted_standard_angles) if save_standard_angles else []
 
     if json_path:
       try:
@@ -1531,7 +1617,7 @@ def apply_and_save_keypoints(
 
         idx_to_name = {int(k): v for k, v in orig_data.get("skeleton", {}).items()} or idx_to_name
         manual_angle_records = _build_manual_angle_records(raw_manual_angles, kps_for_json, idx_to_name)
-        standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name) if save_standard_angles else []
+        standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name, deleted_standard_angles) if save_standard_angles else []
 
         if not orig_data.get("keypoints") or not isinstance(orig_data["keypoints"], list):
           orig_data["keypoints"] = [{"0": kps_for_json}]
@@ -1546,16 +1632,17 @@ def apply_and_save_keypoints(
         orig_data["angles"] = standard_angle_records + manual_angle_records
         orig_data["standard_angles"] = standard_angle_records
         orig_data["manual_angles"] = manual_angle_records
+        orig_data["deleted_standard_angles"] = deleted_standard_angles
         orig_data["manual_angle_schema"] = _manual_angle_schema()
 
         p.write_text(json.dumps(orig_data, ensure_ascii=False), encoding="utf-8")
-        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, str(p), original_img_path)
+        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, str(p), original_img_path, deleted_standard_angles)
         status = f"Kaydedildi: {p.name} | aci: {len(standard_angle_records) + len(manual_angle_records)} | aci JSON: {angles_path}"
       except Exception as e:
         return current_payload, f"JSON kaydedilemedi: {e}"
     else:
       try:
-        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, "", original_img_path)
+        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, "", original_img_path, deleted_standard_angles)
         status = f"Goruntu guncellendi | aci: {len(standard_angle_records) + len(manual_angle_records)} | aci JSON: {angles_path}"
       except Exception as e:
         return current_payload, f"Aci JSON kaydedilemedi: {e}"
@@ -1566,6 +1653,7 @@ def apply_and_save_keypoints(
       canvas_scale=canvas_scale,
       idx_to_name=idx_to_name,
       manual_angles=manual_angle_records,
+      deleted_standard_angles=deleted_standard_angles,
     )
     if not new_payload:
       return current_payload, f"{status} | Canvas yenilenemedi: {prep_status}"
