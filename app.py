@@ -169,6 +169,59 @@ def handle_video_upload(video_file: Any) -> Tuple[str, str]:
     return str(video_path), "\n".join(status)
 
 
+def _build_pose_video_from_frames(
+    frame_paths: List[str],
+    output_base_path: Path,
+    fps: float,
+) -> Tuple[Optional[str], Optional[str]]:
+    if not frame_paths:
+        return None, "Pose video icin islenmis frame yok."
+
+    first_frame = cv2.imread(frame_paths[0])
+    if first_frame is None:
+        return None, f"Pose video frame okunamadi: {frame_paths[0]}"
+
+    height, width = first_frame.shape[:2]
+    safe_fps = max(0.1, float(fps or 1.0))
+    output_base_path.parent.mkdir(parents=True, exist_ok=True)
+
+    candidates = [
+        (output_base_path.with_suffix(".webm"), "VP80"),
+        (output_base_path.with_suffix(".mp4"), "mp4v"),
+    ]
+    errors = []
+    for output_path, fourcc_name in candidates:
+        writer = cv2.VideoWriter(
+            str(output_path),
+            cv2.VideoWriter_fourcc(*fourcc_name),
+            safe_fps,
+            (width, height),
+        )
+        if not writer.isOpened():
+            errors.append(f"{output_path.suffix}/{fourcc_name} yazici acilamadi")
+            continue
+
+        written = 0
+        try:
+            for frame_path in frame_paths:
+                frame = cv2.imread(frame_path)
+                if frame is None:
+                    continue
+                if frame.shape[1] != width or frame.shape[0] != height:
+                    frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+                writer.write(frame)
+                written += 1
+        finally:
+            writer.release()
+
+        if written > 0 and output_path.exists() and output_path.stat().st_size > 0:
+            return str(output_path), None
+        errors.append(f"{output_path.name} bos olustu")
+
+    return None, "Pose video yazilamadi: " + "; ".join(errors)
+
+
+
 def process_video_frames(
     video_path_text: str,
     requested_fps: float,
@@ -178,6 +231,7 @@ def process_video_frames(
     if not video_path_text:
         return (
             "",
+            None,
             [],
             "Once bir video yukleyin.",
             [],
@@ -192,6 +246,7 @@ def process_video_frames(
     if not video_path.exists():
         return (
             "",
+            None,
             [],
             f"Video dosyasi bulunamadi: {video_path}",
             [],
@@ -212,6 +267,7 @@ def process_video_frames(
     if not capture.isOpened():
         return (
             "",
+            str(video_path),
             [],
             f"Video OpenCV ile acilamadi: {video_path}",
             [],
@@ -237,6 +293,7 @@ def process_video_frames(
 
     gallery_items = []
     batch_items: List[Dict[str, str]] = []
+    pose_video_frame_paths: List[str] = []
     errors = []
     selected_count = 0
     frame_idx = 0
@@ -268,6 +325,7 @@ def process_video_frames(
                 gallery_items.append((out_img, caption))
                 has_pose, pose_error = _has_pose_keypoints(json_path)
                 if has_pose:
+                    pose_video_frame_paths.append(out_img)
                     batch_items.append({
                         "result_image": out_img,
                         "json_path": json_path,
@@ -288,6 +346,7 @@ def process_video_frames(
         error_text = "\n".join(errors) if errors else "Videodan islenebilir frame uretilemedi."
         return (
             "",
+            str(video_path),
             [],
             error_text,
             [],
@@ -299,6 +358,13 @@ def process_video_frames(
         )
 
     elapsed = time.perf_counter() - t0
+    pose_video_path, pose_video_error = _build_pose_video_from_frames(
+        pose_video_frame_paths,
+        run_dir / f"{_safe_folder_name(video_path.stem)}_pose_overlay",
+        target_fps,
+    )
+    if pose_video_error:
+        errors.append(f"Pose video: {pose_video_error}")
     first_item = batch_items[0] if batch_items else None
     first_payload, _ = prepare_editor_from_path(first_item["original_image"], first_item["json_path"]) if first_item else ("", "")
     nav_status = _batch_nav_state_text(0, len(batch_items), first_item["source_name"]) if first_item else "Pose tespit edilen frame yok."
@@ -309,10 +375,12 @@ def process_video_frames(
         f"Toplam frame: {total_frames}",
         f"Secilen frame: {selected_count}",
         f"Basarili frame: {len(gallery_items)}",
+        f"Pose video frame: {len(pose_video_frame_paths)}",
         f"Hatali frame: {len(errors)}",
         f"Device: {runtime_device}",
         f"Cikti klasoru: {run_dir}",
-        f"Pose cikarimli resimler ve JSON dosyalari bu klasore kaydedildi.",
+        f"Pose cikarimli resimler, JSON dosyalari ve video bu klasore kaydedildi.",
+        f"Pose video: {pose_video_path or 'olusturulamadi'}",
         f"Toplam sure: {elapsed:.2f}s",
     ]
     if errors:
@@ -321,6 +389,7 @@ def process_video_frames(
 
     return (
         first_payload,
+        pose_video_path or str(video_path),
         gallery_items,
         "\n".join(status_lines),
         batch_items,
@@ -662,6 +731,7 @@ with gr.Blocks() as demo:
         inputs=[video_path_box, video_fps],
         outputs=[
             pose_editor_html,
+            input_video,
             video_gallery,
             video_status,
             batch_items_state,
