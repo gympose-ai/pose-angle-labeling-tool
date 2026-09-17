@@ -32,8 +32,6 @@ YOLO_MODEL = BASE_DIR / "checkpoints" / "yolo11x.pt"
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".mpeg", ".mpg", ".m4v"}
 _MODEL_CACHE: Dict[str, Any] = {}
-
-
 def _get_runtime_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
@@ -240,6 +238,11 @@ def process_video_frames(
             "",
             "",
             "",
+            "",
+            "",
+            "",
+            "",
+            0,
         )
 
     video_path = Path(video_path_text)
@@ -255,6 +258,11 @@ def process_video_frames(
             "",
             "",
             "",
+            "",
+            "",
+            "",
+            "",
+            0,
         )
 
     try:
@@ -276,6 +284,11 @@ def process_video_frames(
             "",
             "",
             "",
+            "",
+            "",
+            "",
+            "",
+            0,
         )
 
     source_fps = capture.get(cv2.CAP_PROP_FPS) or 0
@@ -322,17 +335,20 @@ def process_video_frames(
                 errors.append(f"Frame {frame_idx}: {err}")
             elif out_img and json_path:
                 caption = f"frame {frame_idx} | {time_sec:.2f}s"
-                gallery_items.append((out_img, caption))
                 has_pose, pose_error = _has_pose_keypoints(json_path)
                 if has_pose:
+                    gallery_index = len(gallery_items)
+                    gallery_items.append((out_img, caption))
                     pose_video_frame_paths.append(out_img)
                     batch_items.append({
+                        "gallery_index": gallery_index,
                         "result_image": out_img,
                         "json_path": json_path,
                         "source_name": caption,
                         "original_image": str(frame_path),
                     })
                 else:
+                    gallery_items.append((out_img, caption))
                     errors.append(f"{caption}: {pose_error}")
 
             selected_count += 1
@@ -355,6 +371,11 @@ def process_video_frames(
             "",
             "",
             "",
+            "",
+            "",
+            "",
+            "",
+            0,
         )
 
     elapsed = time.perf_counter() - t0
@@ -367,6 +388,9 @@ def process_video_frames(
         errors.append(f"Pose video: {pose_video_error}")
     first_item = batch_items[0] if batch_items else None
     first_payload, _ = prepare_editor_from_path(first_item["original_image"], first_item["json_path"]) if first_item else ("", "")
+    video_first_payload, video_first_original, video_first_json, video_first_status = (
+        _prepare_video_editor_from_item(first_item) if first_item else ("", "", "", "Video frame sonucu yok.")
+    )
     nav_status = _batch_nav_state_text(0, len(batch_items), first_item["source_name"]) if first_item else "Pose tespit edilen frame yok."
     status_lines = [
         f"Video islendi: {video_path.name}",
@@ -398,11 +422,39 @@ def process_video_frames(
         nav_status,
         first_item["original_image"] if first_item else "",
         first_item["json_path"] if first_item else "",
+        video_first_payload,
+        video_first_original,
+        video_first_json,
+        video_first_status,
+        0,
     )
 
 
 def _batch_nav_state_text(index: int, total: int, source_name: str) -> str:
     return f"{index + 1}/{total} - {source_name}"
+
+
+def _prepare_video_editor_from_item(item: Dict[str, str]) -> Tuple[str, str, str, str]:
+    original_image = item.get("original_image", "")
+    json_path = item.get("json_path", "")
+    payload, status = prepare_editor_from_path(
+        original_image,
+        json_path,
+        editor_role="video",
+        output_id="video_kp_editor_output",
+        prev_trigger_id="video_pe_prev_trigger",
+        next_trigger_id="video_pe_next_trigger",
+    )
+    return payload, original_image, json_path, status
+
+
+def _show_video_editor_item(batch_items: List[Dict[str, str]], index: int):
+    if not batch_items:
+        return "", "", "", "Video frame sonucu yok.", 0
+
+    idx = max(0, min(index, len(batch_items) - 1))
+    payload, original_image, json_path, status = _prepare_video_editor_from_item(batch_items[idx])
+    return payload, original_image, json_path, status, idx
 
 
 def _show_batch_item(batch_items: List[Dict[str, str]], index: int):
@@ -457,6 +509,37 @@ def show_next_batch(batch_items: List[Dict[str, str]], current_idx: int):
 def show_batch_by_slider(batch_items: List[Dict[str, str]], slider_idx: float):
     target_idx = int(slider_idx) - 1
     return _show_batch_item(batch_items, target_idx)
+
+
+def show_video_gallery_selection(batch_items: List[Dict[str, str]], evt: gr.SelectData):
+    if not batch_items:
+        return "", "", "", "Video frame sonucu yok.", 0
+
+    gallery_index = getattr(evt, "index", 0)
+    if isinstance(gallery_index, (list, tuple)):
+        gallery_index = gallery_index[0] if gallery_index else 0
+    try:
+        gallery_index = int(gallery_index)
+    except Exception:
+        gallery_index = 0
+
+    target_idx = None
+    for idx, item in enumerate(batch_items):
+        if int(item.get("gallery_index", idx)) == gallery_index:
+            target_idx = idx
+            break
+    if target_idx is None:
+        target_idx = max(0, min(gallery_index, len(batch_items) - 1))
+
+    return _show_video_editor_item(batch_items, target_idx)
+
+
+def show_prev_video_editor_item(batch_items: List[Dict[str, str]], current_idx: int):
+    return _show_video_editor_item(batch_items, current_idx - 1)
+
+
+def show_next_video_editor_item(batch_items: List[Dict[str, str]], current_idx: int):
+    return _show_video_editor_item(batch_items, current_idx + 1)
 
 
 def run_vitpose(image: Image.Image, folder_path: str):
@@ -713,7 +796,20 @@ with gr.Blocks() as demo:
         process_video_btn = gr.Button("Videodan Frame Cikar ve ViTPose Calistir", variant="primary")
         video_path_box = gr.Textbox(label="Uploaded Video Path", lines=2, interactive=False)
         video_status = gr.Textbox(label="Video Status", lines=7, interactive=False)
-        video_gallery = gr.Gallery(label="Video Frame Overlay Results", columns=4, height=280)
+        video_gallery = gr.Gallery(label="Video Frame Results", columns=4, height=280)
+        gr.Markdown("### Video Frame Editor")
+        video_frame_editor_html = create_editor_component()
+        video_kp_editor_output = gr.Textbox(
+            elem_id="video_kp_editor_output", elem_classes="pe-hidden-trigger", lines=1
+        )
+        video_prev_trigger = gr.Textbox(elem_classes="pe-hidden-trigger", elem_id="video_pe_prev_trigger")
+        video_next_trigger = gr.Textbox(elem_classes="pe-hidden-trigger", elem_id="video_pe_next_trigger")
+        video_frame_json_state = gr.State("")
+        video_frame_original_state = gr.State("")
+        video_frame_index_state = gr.State(0)
+        with gr.Row():
+            video_apply_save_btn = gr.Button("✅ Video Frame Apply & Save", variant="primary")
+            video_editor_status = gr.Textbox(label="Video Editor Status", lines=1, interactive=False)
 
     # State
     batch_items_state  = gr.State([])
@@ -740,6 +836,11 @@ with gr.Blocks() as demo:
             batch_nav_status,
             original_img_state,
             json_path_box,
+            video_frame_editor_html,
+            video_frame_original_state,
+            video_frame_json_state,
+            video_editor_status,
+            video_frame_index_state,
         ],
     )
 
@@ -751,6 +852,13 @@ with gr.Blocks() as demo:
         batch_slider,
         batch_nav_status,
         original_img_state,
+    ]
+    _VIDEO_EDITOR_OUTPUTS = [
+        video_frame_editor_html,
+        video_frame_original_state,
+        video_frame_json_state,
+        video_editor_status,
+        video_frame_index_state,
     ]
 
     run_button.click(
@@ -788,6 +896,24 @@ with gr.Blocks() as demo:
         outputs=_NAV_OUTPUTS,
     )
 
+    video_gallery.select(
+        fn=show_video_gallery_selection,
+        inputs=[batch_items_state],
+        outputs=_VIDEO_EDITOR_OUTPUTS,
+    )
+
+    video_prev_trigger.change(
+        fn=show_prev_video_editor_item,
+        inputs=[batch_items_state, video_frame_index_state],
+        outputs=_VIDEO_EDITOR_OUTPUTS,
+    )
+
+    video_next_trigger.change(
+        fn=show_next_video_editor_item,
+        inputs=[batch_items_state, video_frame_index_state],
+        outputs=_VIDEO_EDITOR_OUTPUTS,
+    )
+
     # Read current keypoints directly from canvas on button click.
     _APPLY_JS = """(orig, kps, jpath, payload) => {
         var w = document.querySelector('.pe-wrap');
@@ -802,6 +928,21 @@ with gr.Blocks() as demo:
         inputs=[original_img_state, kp_editor_output, json_path_box, pose_editor_html],
         outputs=[pose_editor_html, editor_status],
         js=_APPLY_JS,
+    )
+
+    _APPLY_VIDEO_JS = """(orig, kps, jpath, payload) => {
+        var w = document.querySelector('.pe-wrap[data-editor-role="video"]');
+        if (w && typeof w._peGetKps === 'function') {
+            kps = w._peGetKps();
+        }
+        return [orig, kps, jpath, payload];
+    }"""
+
+    video_apply_save_btn.click(
+        fn=apply_and_save_keypoints,
+        inputs=[video_frame_original_state, video_kp_editor_output, video_frame_json_state, video_frame_editor_html],
+        outputs=[video_frame_editor_html, video_editor_status],
+        js=_APPLY_VIDEO_JS,
     )
 
     # ── JSON Upload overlay (standalone, has its own image input) ────────────

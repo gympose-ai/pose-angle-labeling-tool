@@ -171,6 +171,10 @@ function bootEditor() {
   var skeleton  = DATA.sk;
   var names     = DATA.nm;
   var csScale   = DATA.cs;
+  var editorRole = DATA.editor_role || 'main';
+  var outputId = DATA.output_id || 'kp_editor_output';
+  var prevTriggerId = DATA.prev_trigger_id || 'pe_prev_trigger';
+  var nextTriggerId = DATA.next_trigger_id || 'pe_next_trigger';
   var dragging  = null;
   var hoveredAngle = null;
   var angleHitboxes = [];
@@ -199,7 +203,7 @@ function bootEditor() {
 
   function emitKeypointsToHiddenOutput() {
     var payload = JSON.stringify(editorStatePayload());
-    var container = document.querySelector('#kp_editor_output');
+    var container = document.querySelector('#' + outputId);
     var el = container
       ? (container.querySelector('textarea') || container.querySelector('input[type="text"]') || container.querySelector('input'))
       : null;
@@ -888,6 +892,7 @@ function bootEditor() {
   /* Expose getter so the Apply-Changes button JS can read fresh keypoints directly */
   var peWrap = element.querySelector('.pe-wrap');
   if (peWrap) {
+    peWrap.dataset.editorRole = editorRole;
     peWrap._peGetKps = function() {
       return JSON.stringify(editorStatePayload());
     };
@@ -968,12 +973,12 @@ function bootEditor() {
   }
 
   rebind('[data-action="prev"]', function() {
-    emitNavTrigger('#pe_prev_trigger');
+    emitNavTrigger('#' + prevTriggerId);
     if (info) info.textContent = 'Onceki goruntüye geçiliyor...';
   });
 
   rebind('[data-action="next"]', function() {
-    emitNavTrigger('#pe_next_trigger');
+    emitNavTrigger('#' + nextTriggerId);
     if (info) info.textContent = 'Sonraki goruntüye geçiliyor...';
   });
 }
@@ -1191,6 +1196,10 @@ def apply_edited_keypoints(
 def prepare_editor_from_path(
     original_img_path: str,
     json_path_str: str,
+    editor_role: str = "main",
+    output_id: str = "kp_editor_output",
+    prev_trigger_id: str = "pe_prev_trigger",
+    next_trigger_id: str = "pe_next_trigger",
 ) -> Tuple[str, str]:
     """Build editor payload from file paths (no gr.File needed).
 
@@ -1256,6 +1265,11 @@ def prepare_editor_from_path(
         "nm":  kp_names,
         "cs":  cs,
         "manual_angles": data.get("manual_angles", []),
+        "deleted_standard_angles": data.get("deleted_standard_angles", []),
+        "editor_role": editor_role,
+        "output_id": output_id,
+        "prev_trigger_id": prev_trigger_id,
+        "next_trigger_id": next_trigger_id,
     }, separators=(",", ":"))
 
     value = base64.b64encode(payload.encode("utf-8")).decode("ascii")
@@ -1479,6 +1493,10 @@ def _build_editor_payload_from_kps(
     idx_to_name: Optional[Dict[int, str]] = None,
     manual_angles: Optional[list] = None,
     deleted_standard_angles: Optional[list] = None,
+    editor_role: str = "main",
+    output_id: str = "kp_editor_output",
+    prev_trigger_id: str = "pe_prev_trigger",
+    next_trigger_id: str = "pe_next_trigger",
 ) -> Tuple[str, str]:
     """Create editor payload directly from (row, col, conf) keypoints."""
     img_path = Path((original_img_path or "").strip())
@@ -1504,6 +1522,10 @@ def _build_editor_payload_from_kps(
         "cs": cs,
         "manual_angles": manual_angles or [],
         "deleted_standard_angles": deleted_standard_angles or [],
+        "editor_role": editor_role,
+        "output_id": output_id,
+        "prev_trigger_id": prev_trigger_id,
+        "next_trigger_id": next_trigger_id,
     }, separators=(",", ":"))
 
     return base64.b64encode(payload.encode("utf-8")).decode("ascii"), "OK"
@@ -1516,6 +1538,10 @@ def _build_editor_payload_from_canvas_kps(
     idx_to_name: Optional[Dict[int, str]] = None,
     manual_angles: Optional[list] = None,
     deleted_standard_angles: Optional[list] = None,
+    editor_role: str = "main",
+    output_id: str = "kp_editor_output",
+    prev_trigger_id: str = "pe_prev_trigger",
+    next_trigger_id: str = "pe_next_trigger",
 ) -> Tuple[str, str]:
     """Create editor payload from current canvas-space keypoints (x, y, c)."""
     img_path = Path((original_img_path or "").strip())
@@ -1550,6 +1576,10 @@ def _build_editor_payload_from_canvas_kps(
       "cs": cs,
       "manual_angles": manual_angles or [],
       "deleted_standard_angles": deleted_standard_angles or [],
+      "editor_role": editor_role,
+      "output_id": output_id,
+      "prev_trigger_id": prev_trigger_id,
+      "next_trigger_id": next_trigger_id,
     }, separators=(",", ":"))
 
     return base64.b64encode(payload.encode("utf-8")).decode("ascii"), "OK"
@@ -1591,6 +1621,10 @@ def apply_and_save_keypoints(
       str(label) for label in payload.get("deleted_standard_angles", [])
       if str(label)
     ]
+    editor_role = str(payload.get("editor_role") or "main")
+    output_id = str(payload.get("output_id") or "kp_editor_output")
+    prev_trigger_id = str(payload.get("prev_trigger_id") or "pe_prev_trigger")
+    next_trigger_id = str(payload.get("next_trigger_id") or "pe_next_trigger")
     save_standard_angles = bool(payload.get("show_standard_angles", False))
 
     # Convert canvas coords -> image coords (row, col, c)
@@ -1654,6 +1688,10 @@ def apply_and_save_keypoints(
       idx_to_name=idx_to_name,
       manual_angles=manual_angle_records,
       deleted_standard_angles=deleted_standard_angles,
+      editor_role=editor_role,
+      output_id=output_id,
+      prev_trigger_id=prev_trigger_id,
+      next_trigger_id=next_trigger_id,
     )
     if not new_payload:
       return current_payload, f"{status} | Canvas yenilenemedi: {prep_status}"
