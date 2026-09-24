@@ -789,7 +789,7 @@ with gr.Blocks() as demo:
             height=260,
         )
         video_fps = gr.Dropdown(
-            choices=[1, 5, 10],
+            choices=list(range(1, 16)),
             value=1,
             label="Frame Cikarma Hizi (kare/sn)",
         )
