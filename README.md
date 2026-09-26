@@ -295,6 +295,8 @@ Her eklem noktası değeri görüntü piksel koordinatlarında `[y, x, güven_sk
 
 `Apply & Save` sırasında ekranda görünen açılar JSON'a yazılır. Standart **Açılar** görünümü açıksa kırmızı standart açılar `standard_angles` alanına, manuel seçilen özel açılar `manual_angles` alanına kaydedilir. Tüm kayıtlar birlikte `angles` alanında da tutulur.
 
+Gövde sapması, kol/bacak sapması, kolların geriye gidişi, kalça fleksiyon/ekstansiyon ve diz ekstansiyon değerleri ayrıca `derived_metrics` alanına kaydedilir.
+
 Her kayıt açının hangi üç keypoint ile hesaplandığını, merkez eklemi, vektörleri ve derece değerini içerir:
 
 ```json

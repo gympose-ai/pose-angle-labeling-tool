@@ -60,6 +60,21 @@ Sistemde bu hesaplama `pose_editor.py` icindeki `calcAngle(a, b, c)` fonksiyonuy
 | R.AyakYonu | `(right_heel, right_ankle, right_big_toe)` = `(24, 18, 22)` | right_ankle | right_ankle -> right_heel ve right_ankle -> right_big_toe |
 | L.AyakYonu | `(left_heel, left_ankle, left_big_toe)` = `(21, 17, 19)` | left_ankle | left_ankle -> left_heel ve left_ankle -> left_big_toe |
 
+## Turetilmis Teknik Metrikler
+
+Uzman degerlendirmesinde gerekli gorulen bazi degerler klasik `A-B-C` eklem acisindan farklidir. Bu nedenle sistem, standart acilara ek olarak `derived_metrics` alaninda asagidaki 2D teknik metrikleri de kaydeder.
+
+| Etiket | Hesaplama | Referans |
+|---|---|---|
+| GovdeSapma | Govde hattinin dikey eksenden sapmasi. Omuz merkezi icin `neck`; kalca merkezi icin `hip` kullanilir. Bu noktalar yoksa sag/sol omuz veya sag/sol kalca orta noktasi kullanilir. | Dikey eksen |
+| R.KolSapma / L.KolSapma | Omuzdan bilege kol hattinin yatay eksenden sapmasi. Bilek yoksa dirsek kullanilir. | Yatay eksen |
+| R.BacakSapma / L.BacakSapma | Kalcadan ayak bilegine bacak hattinin yatay eksenden sapmasi. Ayak bilegi yoksa diz kullanilir. | Yatay eksen |
+| R.KolGeriGidis / L.KolGeriGidis | Omuz merkezli yonlu kol acisi. Referans `shoulder -> hip` govde hattidir; hedef `shoulder -> wrist` kol hattidir. Bilek yoksa dirsek kullanilir. Deger 0-360 derece araligindadir. | Govde referansi |
+| R.KalcaFleksExt / L.KalcaFleksExt | Mevcut kalca acisinin fleksiyon/ekstansiyon amacli etiketlenmis kopyasi. | Omuz-kalca-diz |
+| R.DizEkst / L.DizEkst | Mevcut diz acisinin ekstansiyon amacli etiketlenmis kopyasi. | Kalca-diz-ayak bilegi |
+
+Bu metrikler ekranda `Acilar` modu acikken turuncu etiketlerle gosterilir. `Apply & Save` sonrasinda hem ana JSON icindeki `derived_metrics` alanina hem de ayri `_angles.json` dosyasina yazilir. Genel `angles` listesi artik `standard_angles + derived_metrics + manual_angles` siralamasiyla uretilir.
+
 ## Ozel Aci Modu
 
 Arayuzdeki `Ozel Aci` modu, standart tabloda olmayan acilar icin kullanilir. Kullanici uc keypoint secer:

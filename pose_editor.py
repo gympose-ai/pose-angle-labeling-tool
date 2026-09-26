@@ -308,6 +308,7 @@ function bootEditor() {
     }
     angleHitboxes = [];
     drawAngles();
+    drawDerivedMetrics();
     drawCustomAngles();
     drawCustomAnglePick();
     drawAngleTooltip();
@@ -324,6 +325,192 @@ function bootEditor() {
     var mc  = Math.sqrt(bcx * bcx + bcy * bcy);
     if (ma < 1 || mc < 1) return null;
     return Math.round(Math.acos(Math.max(-1, Math.min(1, dot / (ma * mc)))) * 180 / Math.PI);
+  }
+
+  function midpointPoint(a, b) {
+    if (!validAngleKeypoint(a) || !validAngleKeypoint(b)) return null;
+    return {
+      x: (a.x + b.x) / 2,
+      y: (a.y + b.y) / 2,
+      c: Math.min(a.c, b.c)
+    };
+  }
+
+  function bodyCenter(primaryIdx, leftIdx, rightIdx) {
+    if (primaryIdx < keypoints.length && validAngleKeypoint(keypoints[primaryIdx])) {
+      return { point: keypoints[primaryIdx], indices: [primaryIdx] };
+    }
+    if (leftIdx < keypoints.length && rightIdx < keypoints.length) {
+      var mid = midpointPoint(keypoints[leftIdx], keypoints[rightIdx]);
+      if (mid) return { point: mid, indices: [leftIdx, rightIdx] };
+    }
+    return null;
+  }
+
+  function vectorAngleDeviation(vx, vy, ax, ay) {
+    var mv = Math.sqrt(vx * vx + vy * vy);
+    var ma = Math.sqrt(ax * ax + ay * ay);
+    if (mv < 1 || ma < 1) return null;
+    var cosang = Math.abs((vx * ax + vy * ay) / (mv * ma));
+    return Math.round(Math.acos(Math.max(-1, Math.min(1, cosang))) * 180 / Math.PI);
+  }
+
+  function directedAngleDegrees(refx, refy, vx, vy) {
+    var mr = Math.sqrt(refx * refx + refy * refy);
+    var mv = Math.sqrt(vx * vx + vy * vy);
+    if (mr < 1 || mv < 1) return null;
+    var deg = (Math.atan2(vy, vx) - Math.atan2(refy, refx)) * 180 / Math.PI;
+    while (deg < 0) deg += 360;
+    while (deg >= 360) deg -= 360;
+    return Math.round(deg);
+  }
+
+  function pushMetric(metrics, label, angle, x, y, points, vertex) {
+    if (angle === null || !Number.isFinite(angle)) return;
+    metrics.push({
+      label: label,
+      angle: angle,
+      x: x,
+      y: y,
+      points: points,
+      vertex: vertex || 'Referans eksen'
+    });
+  }
+
+  function derivedMetrics() {
+    var metrics = [];
+    var shoulderCenter = bodyCenter(5, 6, 7);
+    var hipCenter = bodyCenter(14, 12, 13);
+
+    if (shoulderCenter && hipCenter) {
+      var sx = shoulderCenter.point.x, sy = shoulderCenter.point.y;
+      var hx = hipCenter.point.x, hy = hipCenter.point.y;
+      pushMetric(
+        metrics,
+        'GovdeSapma',
+        vectorAngleDeviation(sx - hx, sy - hy, 0, -1),
+        (sx + hx) / 2,
+        (sy + hy) / 2,
+        ['shoulder_center', 'hip_center'],
+        'Dikey eksen'
+      );
+    }
+
+    function addLimbDeviation(label, startIdx, preferredEndIdx, fallbackEndIdx, axisName, axisX, axisY) {
+      if (startIdx >= keypoints.length) return;
+      var start = keypoints[startIdx];
+      var endIdx = preferredEndIdx;
+      var end = preferredEndIdx < keypoints.length ? keypoints[preferredEndIdx] : null;
+      if (!validAngleKeypoint(end) && fallbackEndIdx < keypoints.length) {
+        endIdx = fallbackEndIdx;
+        end = keypoints[fallbackEndIdx];
+      }
+      if (!validAngleKeypoint(start) || !validAngleKeypoint(end)) return;
+      pushMetric(
+        metrics,
+        label,
+        vectorAngleDeviation(end.x - start.x, end.y - start.y, axisX, axisY),
+        (start.x + end.x) / 2,
+        (start.y + end.y) / 2,
+        [
+          nameForKeypoint(startIdx) + ' [' + startIdx + ']',
+          nameForKeypoint(endIdx) + ' [' + endIdx + ']'
+        ],
+        axisName
+      );
+    }
+
+    addLimbDeviation('R.KolSapma', 7, 11, 9, 'Yatay eksen', 1, 0);
+    addLimbDeviation('L.KolSapma', 6, 10, 8, 'Yatay eksen', 1, 0);
+    addLimbDeviation('R.BacakSapma', 13, 18, 16, 'Yatay eksen', 1, 0);
+    addLimbDeviation('L.BacakSapma', 12, 17, 15, 'Yatay eksen', 1, 0);
+
+    function addArmSwing(label, shoulderIdx, wristIdx, elbowIdx, hipIdx) {
+      if (shoulderIdx >= keypoints.length || hipIdx >= keypoints.length) return;
+      var shoulder = keypoints[shoulderIdx];
+      var hip = keypoints[hipIdx];
+      var endIdx = wristIdx;
+      var end = wristIdx < keypoints.length ? keypoints[wristIdx] : null;
+      if (!validAngleKeypoint(end) && elbowIdx < keypoints.length) {
+        endIdx = elbowIdx;
+        end = keypoints[elbowIdx];
+      }
+      if (!validAngleKeypoint(shoulder) || !validAngleKeypoint(hip) || !validAngleKeypoint(end)) return;
+      pushMetric(
+        metrics,
+        label,
+        directedAngleDegrees(hip.x - shoulder.x, hip.y - shoulder.y, end.x - shoulder.x, end.y - shoulder.y),
+        (shoulder.x + end.x) / 2,
+        (shoulder.y + end.y) / 2,
+        [
+          nameForKeypoint(shoulderIdx) + ' [' + shoulderIdx + ']',
+          nameForKeypoint(endIdx) + ' [' + endIdx + ']'
+        ],
+        'Govde referansi'
+      );
+    }
+
+    addArmSwing('R.KolGeriGidis', 7, 11, 9, 13);
+    addArmSwing('L.KolGeriGidis', 6, 10, 8, 12);
+
+    function addAliasAngle(label, ia, ib, ic) {
+      if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) return;
+      var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
+      if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) return;
+      var ang = calcAngle(ka, kb, kc);
+      if (ang === null) return;
+      pushMetric(
+        metrics,
+        label,
+        ang,
+        kb.x + 16 / zoom,
+        kb.y + 16 / zoom,
+        [
+          nameForKeypoint(ia) + ' [' + ia + ']',
+          nameForKeypoint(ib) + ' [' + ib + ']',
+          nameForKeypoint(ic) + ' [' + ic + ']'
+        ],
+        nameForKeypoint(ib) + ' [' + ib + ']'
+      );
+    }
+
+    addAliasAngle('R.KalcaFleksExt', 7, 13, 16);
+    addAliasAngle('L.KalcaFleksExt', 6, 12, 15);
+    addAliasAngle('R.DizEkst', 13, 16, 18);
+    addAliasAngle('L.DizEkst', 12, 15, 17);
+
+    return metrics;
+  }
+
+  function drawDerivedMetrics() {
+    if (!showAngles) return;
+    var metrics = derivedMetrics();
+    ctx.save();
+    ctx.font = 'bold ' + (11 / zoom) + 'px sans-serif';
+    for (var i = 0; i < metrics.length; i++) {
+      var m = metrics[i];
+      var text = m.label + ': ' + m.angle + '\u00b0';
+      var tx = m.x + 8 / zoom;
+      var ty = m.y - 8 / zoom;
+      ctx.lineWidth = 3 / zoom;
+      ctx.strokeStyle = 'rgba(0,0,0,0.82)';
+      ctx.strokeText(text, tx, ty);
+      ctx.fillStyle = '#ffb000';
+      ctx.fillText(text, tx, ty);
+      angleHitboxes.push({
+        x: tx,
+        y: ty,
+        r: Math.max(28 / zoom, ctx.measureText(text).width / 2),
+        label: m.label,
+        angle: m.angle,
+        source: 'derived',
+        standard_label: null,
+        custom_index: null,
+        points: m.points,
+        vertex: m.vertex
+      });
+    }
+    ctx.restore();
   }
 
   function drawAngles() {
@@ -687,6 +874,9 @@ function bootEditor() {
       customAngles.splice(hit.custom_index, 1);
     } else if (hit.source === 'standard' && hit.standard_label) {
       deletedStandardAngles[hit.standard_label] = true;
+    } else {
+      if (info) info.textContent = hit.label + ' turetilmis metriktir; silinemez.';
+      return;
     }
     hoveredAngle = null;
     render();
@@ -1314,6 +1504,219 @@ def _calc_angle_degrees_from_rc(kps_rc: list, ia: int, ib: int, ic: int) -> Opti
         return None
 
 
+def _point_xy_from_rc(kps_rc: list, idx: int) -> Optional[Tuple[float, float, list]]:
+    if idx >= len(kps_rc) or not _valid_angle_keypoint_rc(kps_rc[idx]):
+        return None
+    kp = kps_rc[idx]
+    return float(kp[1]), float(kp[0]), [idx]
+
+
+def _midpoint_xy_from_rc(kps_rc: list, ia: int, ib: int) -> Optional[Tuple[float, float, list]]:
+    pa = _point_xy_from_rc(kps_rc, ia)
+    pb = _point_xy_from_rc(kps_rc, ib)
+    if pa is None or pb is None:
+        return None
+    return (pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, [ia, ib]
+
+
+def _body_center_xy_from_rc(
+    kps_rc: list,
+    primary_idx: int,
+    left_idx: int,
+    right_idx: int,
+) -> Optional[Tuple[float, float, list]]:
+    primary = _point_xy_from_rc(kps_rc, primary_idx)
+    if primary is not None:
+        return primary
+    return _midpoint_xy_from_rc(kps_rc, left_idx, right_idx)
+
+
+def _vector_axis_deviation_degrees(vx: float, vy: float, ax: float, ay: float) -> Optional[float]:
+    mag_v = float(np.hypot(vx, vy))
+    mag_a = float(np.hypot(ax, ay))
+    if mag_v < 1 or mag_a < 1:
+        return None
+    cosang = abs((vx * ax + vy * ay) / (mag_v * mag_a))
+    return round(float(np.degrees(np.arccos(max(-1.0, min(1.0, cosang))))), 3)
+
+
+def _directed_angle_degrees(refx: float, refy: float, vx: float, vy: float) -> Optional[float]:
+    if float(np.hypot(refx, refy)) < 1 or float(np.hypot(vx, vy)) < 1:
+        return None
+    angle = float(np.degrees(np.arctan2(vy, vx) - np.arctan2(refy, refx)))
+    while angle < 0:
+        angle += 360.0
+    while angle >= 360.0:
+        angle -= 360.0
+    return round(angle, 3)
+
+
+def _metric_names(indices: list, idx_to_name: Dict[int, str]) -> list:
+    return [idx_to_name.get(i, str(i)) for i in indices]
+
+
+def _derived_metric_record(
+    label: str,
+    angle_degrees: Optional[float],
+    keypoint_indices: list,
+    idx_to_name: Dict[int, str],
+    metric_type: str,
+    reference: str,
+    method: str,
+) -> Optional[Dict[str, Any]]:
+    if angle_degrees is None:
+        return None
+    unique_indices = list(dict.fromkeys(int(i) for i in keypoint_indices))
+    return {
+        "label": label,
+        "keypoint_indices": unique_indices,
+        "keypoint_names": _metric_names(unique_indices, idx_to_name),
+        "angle_degrees": angle_degrees,
+        "source": "derived_pose_metric",
+        "metric_type": metric_type,
+        "reference": reference,
+        "method": method,
+    }
+
+
+def _add_segment_deviation_metric(
+    records: list,
+    kps_rc: list,
+    idx_to_name: Dict[int, str],
+    label: str,
+    start_idx: int,
+    preferred_end_idx: int,
+    fallback_end_idx: int,
+    axis_name: str,
+    axis_x: float,
+    axis_y: float,
+) -> None:
+    start = _point_xy_from_rc(kps_rc, start_idx)
+    end = _point_xy_from_rc(kps_rc, preferred_end_idx)
+    end_idx = preferred_end_idx
+    if end is None:
+        end = _point_xy_from_rc(kps_rc, fallback_end_idx)
+        end_idx = fallback_end_idx
+    if start is None or end is None:
+        return
+    angle = _vector_axis_deviation_degrees(end[0] - start[0], end[1] - start[1], axis_x, axis_y)
+    record = _derived_metric_record(
+        label,
+        angle,
+        [start_idx, end_idx],
+        idx_to_name,
+        "axis_deviation",
+        axis_name,
+        "2D segment deviation from the named image-plane axis; 0 degrees means aligned with the axis",
+    )
+    if record:
+        records.append(record)
+
+
+def _add_arm_swing_metric(
+    records: list,
+    kps_rc: list,
+    idx_to_name: Dict[int, str],
+    label: str,
+    shoulder_idx: int,
+    wrist_idx: int,
+    elbow_idx: int,
+    hip_idx: int,
+) -> None:
+    shoulder = _point_xy_from_rc(kps_rc, shoulder_idx)
+    hip = _point_xy_from_rc(kps_rc, hip_idx)
+    end = _point_xy_from_rc(kps_rc, wrist_idx)
+    end_idx = wrist_idx
+    if end is None:
+        end = _point_xy_from_rc(kps_rc, elbow_idx)
+        end_idx = elbow_idx
+    if shoulder is None or hip is None or end is None:
+        return
+    angle = _directed_angle_degrees(
+        hip[0] - shoulder[0],
+        hip[1] - shoulder[1],
+        end[0] - shoulder[0],
+        end[1] - shoulder[1],
+    )
+    record = _derived_metric_record(
+        label,
+        angle,
+        [shoulder_idx, hip_idx, end_idx],
+        idx_to_name,
+        "directed_segment_angle",
+        "trunk line shoulder->hip",
+        "Clockwise 2D directed angle from shoulder->hip trunk reference to shoulder->wrist arm segment; elbow is used if wrist is unavailable",
+    )
+    if record:
+        records.append(record)
+
+
+def _add_joint_alias_metric(
+    records: list,
+    kps_rc: list,
+    idx_to_name: Dict[int, str],
+    label: str,
+    ia: int,
+    ib: int,
+    ic: int,
+    reference: str,
+) -> None:
+    angle = _calc_angle_degrees_from_rc(kps_rc, ia, ib, ic)
+    record = _derived_metric_record(
+        label,
+        angle,
+        [ia, ib, ic],
+        idx_to_name,
+        "joint_angle_alias",
+        reference,
+        "2D angle between vectors B->A and B->C; keypoint order is [A, B(vertex), C]",
+    )
+    if record:
+        record["vertex_index"] = ib
+        record["vertex_name"] = idx_to_name.get(ib, str(ib))
+        records.append(record)
+
+
+def _build_derived_metric_records(kps_rc: list, idx_to_name: Dict[int, str]) -> list:
+    records = []
+
+    shoulder_center = _body_center_xy_from_rc(kps_rc, 5, 6, 7)
+    hip_center = _body_center_xy_from_rc(kps_rc, 14, 12, 13)
+    if shoulder_center is not None and hip_center is not None:
+        angle = _vector_axis_deviation_degrees(
+            shoulder_center[0] - hip_center[0],
+            shoulder_center[1] - hip_center[1],
+            0.0,
+            -1.0,
+        )
+        record = _derived_metric_record(
+            "GovdeSapma",
+            angle,
+            shoulder_center[2] + hip_center[2],
+            idx_to_name,
+            "axis_deviation",
+            "vertical_axis",
+            "2D trunk-line deviation from vertical; neck is preferred for shoulder center and hip midpoint is used if hip center is unavailable",
+        )
+        if record:
+            records.append(record)
+
+    _add_segment_deviation_metric(records, kps_rc, idx_to_name, "R.KolSapma", 7, 11, 9, "horizontal_axis", 1.0, 0.0)
+    _add_segment_deviation_metric(records, kps_rc, idx_to_name, "L.KolSapma", 6, 10, 8, "horizontal_axis", 1.0, 0.0)
+    _add_segment_deviation_metric(records, kps_rc, idx_to_name, "R.BacakSapma", 13, 18, 16, "horizontal_axis", 1.0, 0.0)
+    _add_segment_deviation_metric(records, kps_rc, idx_to_name, "L.BacakSapma", 12, 17, 15, "horizontal_axis", 1.0, 0.0)
+
+    _add_arm_swing_metric(records, kps_rc, idx_to_name, "R.KolGeriGidis", 7, 11, 9, 13)
+    _add_arm_swing_metric(records, kps_rc, idx_to_name, "L.KolGeriGidis", 6, 10, 8, 12)
+
+    _add_joint_alias_metric(records, kps_rc, idx_to_name, "R.KalcaFleksExt", 7, 13, 16, "right hip flexion/extension")
+    _add_joint_alias_metric(records, kps_rc, idx_to_name, "L.KalcaFleksExt", 6, 12, 15, "left hip flexion/extension")
+    _add_joint_alias_metric(records, kps_rc, idx_to_name, "R.DizEkst", 13, 16, 18, "right knee extension")
+    _add_joint_alias_metric(records, kps_rc, idx_to_name, "L.DizEkst", 12, 15, 17, "left knee extension")
+
+    return records
+
+
 def _valid_angle_keypoint_rc(kp: Any) -> bool:
     try:
         y = float(kp[0])
@@ -1459,6 +1862,7 @@ def _manual_angle_schema() -> Dict[str, Any]:
 def _save_angles_sidecar_json(
     manual_angle_records: list,
     standard_angle_records: list,
+    derived_metric_records: list,
     source_json_path: str,
     original_img_path: str,
     deleted_standard_angles: Optional[list] = None,
@@ -1478,8 +1882,9 @@ def _save_angles_sidecar_json(
         "source_image": original_img_path or "",
         "saved_at": datetime.now().isoformat(timespec="seconds"),
         "manual_angle_schema": _manual_angle_schema(),
-        "angles": standard_angle_records + manual_angle_records,
+        "angles": standard_angle_records + derived_metric_records + manual_angle_records,
         "standard_angles": standard_angle_records,
+        "derived_metrics": derived_metric_records,
         "manual_angles": manual_angle_records,
         "deleted_standard_angles": deleted_standard_angles or [],
     }
@@ -1643,6 +2048,7 @@ def apply_and_save_keypoints(
 
     manual_angle_records = _build_manual_angle_records(raw_manual_angles, kps_for_json, idx_to_name)
     standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name, deleted_standard_angles) if save_standard_angles else []
+    derived_metric_records = _build_derived_metric_records(kps_for_json, idx_to_name) if save_standard_angles else []
 
     if json_path:
       try:
@@ -1652,6 +2058,7 @@ def apply_and_save_keypoints(
         idx_to_name = {int(k): v for k, v in orig_data.get("skeleton", {}).items()} or idx_to_name
         manual_angle_records = _build_manual_angle_records(raw_manual_angles, kps_for_json, idx_to_name)
         standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name, deleted_standard_angles) if save_standard_angles else []
+        derived_metric_records = _build_derived_metric_records(kps_for_json, idx_to_name) if save_standard_angles else []
 
         if not orig_data.get("keypoints") or not isinstance(orig_data["keypoints"], list):
           orig_data["keypoints"] = [{"0": kps_for_json}]
@@ -1663,21 +2070,24 @@ def apply_and_save_keypoints(
           person_key = "0" if "0" in person_dict else next(iter(person_dict.keys()))
           person_dict[person_key] = kps_for_json
 
-        orig_data["angles"] = standard_angle_records + manual_angle_records
+        orig_data["angles"] = standard_angle_records + derived_metric_records + manual_angle_records
         orig_data["standard_angles"] = standard_angle_records
+        orig_data["derived_metrics"] = derived_metric_records
         orig_data["manual_angles"] = manual_angle_records
         orig_data["deleted_standard_angles"] = deleted_standard_angles
         orig_data["manual_angle_schema"] = _manual_angle_schema()
 
         p.write_text(json.dumps(orig_data, ensure_ascii=False), encoding="utf-8")
-        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, str(p), original_img_path, deleted_standard_angles)
-        status = f"Kaydedildi: {p.name} | aci: {len(standard_angle_records) + len(manual_angle_records)} | aci JSON: {angles_path}"
+        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, derived_metric_records, str(p), original_img_path, deleted_standard_angles)
+        total_angle_count = len(standard_angle_records) + len(derived_metric_records) + len(manual_angle_records)
+        status = f"Kaydedildi: {p.name} | aci: {total_angle_count} | aci JSON: {angles_path}"
       except Exception as e:
         return current_payload, f"JSON kaydedilemedi: {e}"
     else:
       try:
-        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, "", original_img_path, deleted_standard_angles)
-        status = f"Goruntu guncellendi | aci: {len(standard_angle_records) + len(manual_angle_records)} | aci JSON: {angles_path}"
+        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, derived_metric_records, "", original_img_path, deleted_standard_angles)
+        total_angle_count = len(standard_angle_records) + len(derived_metric_records) + len(manual_angle_records)
+        status = f"Goruntu guncellendi | aci: {total_angle_count} | aci JSON: {angles_path}"
       except Exception as e:
         return current_payload, f"Aci JSON kaydedilemedi: {e}"
 
