@@ -230,11 +230,11 @@ def process_video_frames(
         return (
             "",
             None,
-            [],
+            None,
             "Once bir video yukleyin.",
             [],
             0,
-            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            gr.update(value=1, minimum=1, maximum=2, visible=False),
             "",
             "",
             "",
@@ -243,6 +243,9 @@ def process_video_frames(
             "",
             "",
             0,
+            [],
+            0,
+            "",
         )
 
     video_path = Path(video_path_text)
@@ -250,11 +253,11 @@ def process_video_frames(
         return (
             "",
             None,
-            [],
+            None,
             f"Video dosyasi bulunamadi: {video_path}",
             [],
             0,
-            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            gr.update(value=1, minimum=1, maximum=2, visible=False),
             "",
             "",
             "",
@@ -263,6 +266,9 @@ def process_video_frames(
             "",
             "",
             0,
+            [],
+            0,
+            "",
         )
 
     try:
@@ -276,11 +282,11 @@ def process_video_frames(
         return (
             "",
             str(video_path),
-            [],
+            None,
             f"Video OpenCV ile acilamadi: {video_path}",
             [],
             0,
-            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            gr.update(value=1, minimum=1, maximum=2, visible=False),
             "",
             "",
             "",
@@ -289,6 +295,9 @@ def process_video_frames(
             "",
             "",
             0,
+            [],
+            0,
+            "",
         )
 
     source_fps = capture.get(cv2.CAP_PROP_FPS) or 0
@@ -306,6 +315,7 @@ def process_video_frames(
 
     gallery_items = []
     batch_items: List[Dict[str, str]] = []
+    video_editor_items: List[Dict[str, str]] = []
     pose_video_frame_paths: List[str] = []
     errors = []
     selected_count = 0
@@ -336,19 +346,20 @@ def process_video_frames(
             elif out_img and json_path:
                 caption = f"frame {frame_idx} | {time_sec:.2f}s"
                 has_pose, pose_error = _has_pose_keypoints(json_path)
+                gallery_index = len(gallery_items)
+                gallery_items.append((out_img, caption))
+                editor_item = {
+                    "gallery_index": gallery_index,
+                    "result_image": out_img,
+                    "json_path": json_path,
+                    "source_name": caption,
+                    "original_image": str(frame_path),
+                }
+                video_editor_items.append(editor_item)
                 if has_pose:
-                    gallery_index = len(gallery_items)
-                    gallery_items.append((out_img, caption))
                     pose_video_frame_paths.append(out_img)
-                    batch_items.append({
-                        "gallery_index": gallery_index,
-                        "result_image": out_img,
-                        "json_path": json_path,
-                        "source_name": caption,
-                        "original_image": str(frame_path),
-                    })
+                    batch_items.append(editor_item)
                 else:
-                    gallery_items.append((out_img, caption))
                     errors.append(f"{caption}: {pose_error}")
 
             selected_count += 1
@@ -363,11 +374,11 @@ def process_video_frames(
         return (
             "",
             str(video_path),
-            [],
+            None,
             error_text,
             [],
             0,
-            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            gr.update(value=1, minimum=1, maximum=2, visible=False),
             "",
             "",
             "",
@@ -376,6 +387,9 @@ def process_video_frames(
             "",
             "",
             0,
+            [],
+            0,
+            "",
         )
 
     elapsed = time.perf_counter() - t0
@@ -386,12 +400,25 @@ def process_video_frames(
     )
     if pose_video_error:
         errors.append(f"Pose video: {pose_video_error}")
+    for editor_idx, editor_item in enumerate(video_editor_items):
+        editor_payload, _, _, editor_status = _prepare_video_editor_from_item(
+            editor_item,
+            editor_idx,
+            len(video_editor_items),
+        )
+        editor_item["editor_payload"] = editor_payload
+        editor_item["editor_status"] = editor_status
     first_item = batch_items[0] if batch_items else None
     first_payload, _ = prepare_editor_from_path(first_item["original_image"], first_item["json_path"]) if first_item else ("", "")
+    video_first_batch_idx = 0 if video_editor_items else None
+    video_first_item = video_editor_items[0] if video_editor_items else None
     video_first_payload, video_first_original, video_first_json, video_first_status = (
-        _prepare_video_editor_from_item(first_item) if first_item else ("", "", "", "Video frame sonucu yok.")
+        _prepare_video_editor_from_item(video_first_item, 0, len(video_editor_items))
+        if video_first_item
+        else ("", "", "", "Video frame sonucu yok.")
     )
     nav_status = _batch_nav_state_text(0, len(batch_items), first_item["source_name"]) if first_item else "Pose tespit edilen frame yok."
+    video_result_nav_status = _batch_nav_state_text(0, len(gallery_items), gallery_items[0][1])
     status_lines = [
         f"Video islendi: {video_path.name}",
         f"Kaynak FPS: {source_fps:.2f}",
@@ -399,6 +426,7 @@ def process_video_frames(
         f"Toplam frame: {total_frames}",
         f"Secilen frame: {selected_count}",
         f"Basarili frame: {len(gallery_items)}",
+        f"Editor frame: {len(video_editor_items)}",
         f"Pose video frame: {len(pose_video_frame_paths)}",
         f"Hatali frame: {len(errors)}",
         f"Device: {runtime_device}",
@@ -414,11 +442,11 @@ def process_video_frames(
     return (
         first_payload,
         pose_video_path or str(video_path),
-        gallery_items,
+        gallery_items[0][0] if gallery_items else None,
         "\n".join(status_lines),
         batch_items,
         0,
-        gr.update(value=1, minimum=1, maximum=max(1, len(batch_items)), visible=bool(batch_items)),
+        gr.update(value=1, minimum=1, maximum=max(2, len(batch_items)), visible=len(batch_items) > 1),
         nav_status,
         first_item["original_image"] if first_item else "",
         first_item["json_path"] if first_item else "",
@@ -426,40 +454,247 @@ def process_video_frames(
         video_first_original,
         video_first_json,
         video_first_status,
+        video_first_batch_idx or 0,
+        video_editor_items,
         0,
+        video_result_nav_status,
     )
+
+
+def process_video_for_shared_editor(
+    video_path_text: str,
+    requested_fps: float,
+    progress=gr.Progress(),
+):
+    """Map the video pipeline onto the single shared pose editor UI."""
+    result = process_video_frames(video_path_text, requested_fps, progress)
+    return (
+        result[10],  # shared editor payload
+        result[1],   # rendered pose video
+        result[3],   # video processing status
+        result[11],  # active original frame
+        result[12],  # active frame JSON
+        result[13],  # editor status
+        result[14],  # active video frame index
+        result[15],  # all video editor items
+        result[16],  # legacy result index
+        result[17],  # legacy navigation status
+    )
+
+
+def _status_box_updates(message: str, force_error: bool = False):
+    """Split regular processing details and errors into separate UI boxes."""
+    text = str(message or "").strip()
+    info_text = ""
+    error_text = ""
+
+    if force_error:
+        error_text = text
+    else:
+        lines = text.splitlines()
+        error_index = next(
+            (idx for idx, line in enumerate(lines) if line.strip().casefold() == "hatalar:"),
+            None,
+        )
+        if error_index is None:
+            info_text = text
+        else:
+            info_text = "\n".join(lines[:error_index]).strip()
+            error_lines = [line for line in lines[error_index + 1:] if line.strip()]
+            error_text = "\n".join(error_lines).strip()
+
+    info_update = gr.update(value=info_text, visible=bool(info_text))
+    error_update = gr.update(
+        value=(f"**Hatalar**\n\n{error_text}" if error_text else ""),
+        visible=bool(error_text),
+    )
+    return info_update, error_update
+
+
+def preview_uploaded_video(uploaded_file: Any):
+    """Show an immediate preview only when the shared upload is a video."""
+    media_path = _uploaded_file_path(uploaded_file)
+    if (
+        media_path is not None
+        and media_path.exists()
+        and media_path.is_file()
+        and media_path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+    ):
+        return gr.update(value=str(media_path), visible=True)
+    return gr.update(value=None, visible=False)
+
+
+def process_uploaded_media(
+    uploaded_file: Any,
+    requested_fps: float,
+    progress=gr.Progress(),
+):
+    """Run image or video inference from the shared upload component."""
+    media_path = _uploaded_file_path(uploaded_file)
+
+    def error_result(message: str):
+        info_update, error_update = _status_box_updates(message, force_error=True)
+        return (
+            "",
+            gr.update(value=None, visible=False),
+            info_update,
+            error_update,
+            "",
+            "",
+            0,
+            [],
+            0,
+            "",
+        )
+
+    if media_path is None:
+        return error_result("Lutfen bir gorsel veya video secin.")
+    if not media_path.exists() or not media_path.is_file():
+        return error_result(f"Dosya bulunamadi: {media_path}")
+
+    extension = media_path.suffix.lower()
+    if extension in SUPPORTED_VIDEO_EXTENSIONS:
+        result = process_video_for_shared_editor(
+            str(media_path),
+            requested_fps,
+            progress,
+        )
+        info_update, error_update = _status_box_updates(result[2])
+        return (
+            result[0],
+            gr.update(value=result[1], visible=True),
+            info_update,
+            error_update,
+            result[3],
+            result[4],
+            result[6],
+            result[7],
+            result[8],
+            result[9],
+        )
+
+    if extension in SUPPORTED_IMAGE_EXTENSIONS:
+        try:
+            with Image.open(media_path) as source_image:
+                image = source_image.convert("RGB")
+        except Exception as exc:
+            return error_result(f"Gorsel okunamadi: {exc}")
+
+        result = run_vitpose(image, "")
+        info_update, error_update = _status_box_updates(
+            result[2],
+            force_error=not bool(result[0]),
+        )
+        return (
+            result[0],
+            gr.update(value=None, visible=False),
+            info_update,
+            error_update,
+            result[9],
+            result[2],
+            0,
+            [],
+            0,
+            "",
+        )
+
+    supported = ", ".join(
+        sorted(SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_VIDEO_EXTENSIONS)
+    )
+    return error_result(
+        f"Desteklenmeyen dosya formati: {extension or '(uzanti yok)'}. "
+        f"Desteklenenler: {supported}"
+    )
+
+
+def reset_pose_workspace():
+    """Return the pose workspace to its initial state after upload removal."""
+    return (
+        "",
+        gr.update(value=None, visible=False),
+        gr.update(value=None, visible=False),
+        gr.update(
+            value="Hazır — yeni bir görsel veya video yükleyebilirsiniz.",
+            visible=True,
+        ),
+        gr.update(value="", visible=False),
+        "",
+        "",
+        0,
+        [],
+        0,
+        "",
+        "",
+    )
+
+
+def apply_and_save_for_ui(
+    original_img_path: str,
+    kps_json: str,
+    json_path_str: str,
+    current_payload: str = "",
+):
+    """Route Apply & Save feedback to the correct status box."""
+    payload, status = apply_and_save_keypoints(
+        original_img_path,
+        kps_json,
+        json_path_str,
+        current_payload,
+    )
+    success = status.startswith(("Kaydedildi:", "Goruntu guncellendi"))
+    info_update, error_update = _status_box_updates(status, force_error=not success)
+    return payload, info_update, error_update
 
 
 def _batch_nav_state_text(index: int, total: int, source_name: str) -> str:
     return f"{index + 1}/{total} - {source_name}"
 
 
-def _prepare_video_editor_from_item(item: Dict[str, str]) -> Tuple[str, str, str, str]:
+def _prepare_video_editor_from_item(
+    item: Dict[str, str],
+    frame_index: int = 0,
+    frame_count: int = 1,
+) -> Tuple[str, str, str, str]:
     original_image = item.get("original_image", "")
     json_path = item.get("json_path", "")
+    cached_payload = item.get("editor_payload", "")
+    if cached_payload:
+        return (
+            cached_payload,
+            original_image,
+            json_path,
+            item.get("editor_status", "Editor hazir."),
+        )
     payload, status = prepare_editor_from_path(
         original_image,
         json_path,
         editor_role="video",
-        output_id="video_kp_editor_output",
+        output_id="kp_editor_output",
         prev_trigger_id="video_pe_prev_trigger",
         next_trigger_id="video_pe_next_trigger",
+        frame_trigger_id="video_pe_frame_trigger",
+        frame_index=frame_index,
+        frame_count=frame_count,
     )
     return payload, original_image, json_path, status
 
 
 def _show_video_editor_item(batch_items: List[Dict[str, str]], index: int):
     if not batch_items:
-        return "", "", "", "Video frame sonucu yok.", 0
+        return "", "", "", 0
 
-    idx = max(0, min(index, len(batch_items) - 1))
-    payload, original_image, json_path, status = _prepare_video_editor_from_item(batch_items[idx])
-    return payload, original_image, json_path, status, idx
+    idx = max(0, min(int(float(index or 0)), len(batch_items) - 1))
+    payload, original_image, json_path, _ = _prepare_video_editor_from_item(
+        batch_items[idx],
+        idx,
+        len(batch_items),
+    )
+    return payload, original_image, json_path, idx
 
 
 def _show_batch_item(batch_items: List[Dict[str, str]], index: int):
     if not batch_items:
-        return "", "", 0, gr.update(value=1, minimum=1, maximum=1, visible=False), "Batch sonucu yok.", ""
+        return "", "", 0, gr.update(value=1, minimum=1, maximum=2, visible=False), "Batch sonucu yok.", ""
 
     idx = max(0, min(index, len(batch_items) - 1))
     item = batch_items[idx]
@@ -472,7 +707,7 @@ def _show_batch_item(batch_items: List[Dict[str, str]], index: int):
         editor_payload,
         item["json_path"],
         idx,
-        gr.update(value=idx + 1, minimum=1, maximum=len(batch_items), visible=True),
+        gr.update(value=idx + 1, minimum=1, maximum=max(2, len(batch_items)), visible=len(batch_items) > 1),
         nav_text,
         item.get("original_image", ""),
     )
@@ -511,35 +746,74 @@ def show_batch_by_slider(batch_items: List[Dict[str, str]], slider_idx: float):
     return _show_batch_item(batch_items, target_idx)
 
 
-def show_video_gallery_selection(batch_items: List[Dict[str, str]], evt: gr.SelectData):
-    if not batch_items:
-        return "", "", "", "Video frame sonucu yok.", 0
+def _video_result_entry(video_results: List[Any], index: int) -> Tuple[Optional[str], str, int]:
+    if not video_results:
+        return None, "Video frame sonucu yok.", 0
 
-    gallery_index = getattr(evt, "index", 0)
-    if isinstance(gallery_index, (list, tuple)):
-        gallery_index = gallery_index[0] if gallery_index else 0
-    try:
-        gallery_index = int(gallery_index)
-    except Exception:
-        gallery_index = 0
+    idx = max(0, min(int(index), len(video_results) - 1))
+    entry = video_results[idx]
+    if isinstance(entry, dict):
+        result_image = entry.get("result_image") or entry.get("image")
+        caption = entry.get("source_name") or entry.get("caption") or f"Frame {idx + 1}"
+    else:
+        result_image = entry[0] if isinstance(entry, (list, tuple)) and entry else entry
+        caption = entry[1] if isinstance(entry, (list, tuple)) and len(entry) > 1 else f"Frame {idx + 1}"
 
-    target_idx = None
-    for idx, item in enumerate(batch_items):
-        if int(item.get("gallery_index", idx)) == gallery_index:
-            target_idx = idx
+    return str(result_image) if result_image else None, _batch_nav_state_text(idx, len(video_results), str(caption)), idx
+
+
+def _show_video_result_item(
+    video_results: List[Any],
+    batch_items: List[Dict[str, str]],
+    index: int,
+):
+    result_image, nav_text, result_idx = _video_result_entry(video_results, index)
+    matched_batch_idx = None
+    for idx, item in enumerate(batch_items or []):
+        if int(item.get("gallery_index", idx)) == result_idx:
+            matched_batch_idx = idx
             break
-    if target_idx is None:
-        target_idx = max(0, min(gallery_index, len(batch_items) - 1))
 
-    return _show_video_editor_item(batch_items, target_idx)
+    if matched_batch_idx is None:
+        return result_image, nav_text, result_idx, "", "", "", f"{nav_text} | Pose tespit edilemedi.", 0
 
-
-def show_prev_video_editor_item(batch_items: List[Dict[str, str]], current_idx: int):
-    return _show_video_editor_item(batch_items, current_idx - 1)
+    payload, original_image, json_path, status = _prepare_video_editor_from_item(batch_items[matched_batch_idx])
+    return result_image, nav_text, result_idx, payload, original_image, json_path, status, matched_batch_idx
 
 
-def show_next_video_editor_item(batch_items: List[Dict[str, str]], current_idx: int):
-    return _show_video_editor_item(batch_items, current_idx + 1)
+def _show_video_editor_and_result(
+    video_results: List[Any],
+    batch_items: List[Dict[str, str]],
+    index: int,
+):
+    if not batch_items:
+        return _show_video_result_item(video_results, batch_items, 0)
+
+    batch_idx = max(0, min(int(index), len(batch_items) - 1))
+    item = batch_items[batch_idx]
+    result_idx = int(item.get("gallery_index", batch_idx))
+    result_image, nav_text, result_idx = _video_result_entry(video_results, result_idx)
+    if result_image is None:
+        result_image = item.get("result_image")
+        nav_text = _batch_nav_state_text(result_idx, len(video_results) or len(batch_items), item.get("source_name", ""))
+    payload, original_image, json_path, status = _prepare_video_editor_from_item(item)
+    return result_image, nav_text, result_idx, payload, original_image, json_path, status, batch_idx
+
+
+def show_prev_video_result(video_results: List[Any], batch_items: List[Dict[str, str]], current_idx: int):
+    return _show_video_result_item(video_results, batch_items, current_idx - 1)
+
+
+def show_next_video_result(video_results: List[Any], batch_items: List[Dict[str, str]], current_idx: int):
+    return _show_video_result_item(video_results, batch_items, current_idx + 1)
+
+
+def show_prev_video_editor_item(video_results: List[Any], batch_items: List[Dict[str, str]], current_idx: int):
+    return _show_video_editor_and_result(video_results, batch_items, current_idx - 1)
+
+
+def show_next_video_editor_item(video_results: List[Any], batch_items: List[Dict[str, str]], current_idx: int):
+    return _show_video_editor_and_result(video_results, batch_items, current_idx + 1)
 
 
 def run_vitpose(image: Image.Image, folder_path: str):
@@ -554,7 +828,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
 
         out_img, json_path, err = _run_inference_for_input(input_path)
         if err:
-            return "", [], err, [], 0, gr.update(value=1, minimum=1, maximum=1, visible=False), gr.update(), gr.update(), "", ""
+            return "", [], err, [], 0, gr.update(value=1, minimum=1, maximum=2, visible=False), gr.update(), gr.update(), "", ""
 
         has_pose, pose_error = _has_pose_keypoints(json_path)
         if not has_pose:
@@ -565,7 +839,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
                 f"{json_path}\nPose tespit edilemedi: {pose_error}\nDevice: {runtime_device} | Time: {elapsed:.2f}s",
                 [],
                 0,
-                gr.update(value=1, minimum=1, maximum=1, visible=False),
+                gr.update(value=1, minimum=1, maximum=2, visible=False),
                 gr.update(),
                 gr.update(),
                 "Tek goruntu modu: pose yok.",
@@ -580,7 +854,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
             f"{json_path}\nDevice: {runtime_device} | Time: {elapsed:.2f}s",
             [],
             0,
-            gr.update(value=1, minimum=1, maximum=1, visible=False),
+            gr.update(value=1, minimum=1, maximum=2, visible=False),
             gr.update(),
             gr.update(),
             "Tek görüntü modu.",
@@ -588,15 +862,15 @@ def run_vitpose(image: Image.Image, folder_path: str):
         )
 
     if not folder_path:
-        return None, [], "Tek bir görüntü yükleyin veya görüntü klasörü yolu girin.", [], 0, gr.update(value=1, minimum=1, maximum=1, visible=False), gr.update(), gr.update(), "", ""
+        return None, [], "Tek bir görüntü yükleyin veya görüntü klasörü yolu girin.", [], 0, gr.update(value=1, minimum=1, maximum=2, visible=False), gr.update(), gr.update(), "", ""
 
     dir_path = Path(folder_path)
     if not dir_path.exists() or not dir_path.is_dir():
-        return None, [], f"Klasör bulunamadı veya geçersiz: {folder_path}", [], 0, gr.update(value=1, minimum=1, maximum=1, visible=False), gr.update(), gr.update(), "", ""
+        return None, [], f"Klasör bulunamadı veya geçersiz: {folder_path}", [], 0, gr.update(value=1, minimum=1, maximum=2, visible=False), gr.update(), gr.update(), "", ""
 
     image_files = _collect_images_from_directory(dir_path)
     if not image_files:
-        return None, [], f"Klasörde desteklenen görüntü bulunamadı: {folder_path}", [], 0, gr.update(value=1, minimum=1, maximum=1, visible=False), gr.update(), gr.update(), "", ""
+        return None, [], f"Klasörde desteklenen görüntü bulunamadı: {folder_path}", [], 0, gr.update(value=1, minimum=1, maximum=2, visible=False), gr.update(), gr.update(), "", ""
 
     gallery_items = []
     batch_items: List[Dict[str, str]] = []
@@ -631,7 +905,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
 
     if not gallery_items:
         error_text = "\n".join(errors) if errors else "Klasördeki görüntüler işlenemedi."
-        return None, [], error_text, [], 0, gr.update(value=1, minimum=1, maximum=1, visible=False), gr.update(visible=False), gr.update(visible=False), "", ""
+        return None, [], error_text, [], 0, gr.update(value=1, minimum=1, maximum=2, visible=False), gr.update(visible=False), gr.update(visible=False), "", ""
 
     status_lines = [
         f"Device: {runtime_device}",
@@ -660,7 +934,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
         "\n".join(status_lines),
         batch_items,
         0,
-        gr.update(value=1, minimum=1, maximum=max(1, len(batch_items)), visible=bool(batch_items)),
+        gr.update(value=1, minimum=1, maximum=max(2, len(batch_items)), visible=len(batch_items) > 1),
         gr.update(),
         gr.update(),
         nav_status,
@@ -740,178 +1014,219 @@ def draw_from_json(image: Image.Image, json_file) -> Tuple[Image.Image, str]:
 
 _CSS = """
 .pe-hidden-trigger { display: none !important; }
+#media-status-messagebox,
+#media-error-messagebox {
+  border: 1px solid #60a5fa !important;
+  border-left: 5px solid #3b82f6 !important;
+  border-radius: 9px !important;
+  background: rgba(59, 130, 246, 0.10) !important;
+  padding: 12px 14px 12px 46px !important;
+  position: relative;
+  min-height: 48px;
+  max-width: 100%;
+  overflow: hidden !important;
+  box-sizing: border-box;
+}
+#media-status-messagebox::before,
+#media-error-messagebox::before {
+  content: "i";
+  position: absolute;
+  left: 15px;
+  top: 13px;
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: #3b82f6;
+  color: white;
+  font: 700 14px/21px sans-serif;
+  text-align: center;
+}
+#media-error-messagebox {
+  border-color: #f87171 !important;
+  border-left-color: #ef4444 !important;
+  background: rgba(239, 68, 68, 0.10) !important;
+  margin-top: 10px;
+}
+#media-error-messagebox::before {
+  content: "!";
+  background: #ef4444;
+}
+#media-status-messagebox .prose,
+#media-error-messagebox .prose {
+  margin: 0 !important;
+  white-space: pre-wrap;
+  max-width: 100%;
+  overflow: hidden !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+#media-status-messagebox .prose *,
+#media-error-messagebox .prose * {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+#media-status-messagebox .prose > :first-child,
+#media-error-messagebox .prose > :first-child { margin-top: 0 !important; }
+#media-status-messagebox .prose > :last-child,
+#media-error-messagebox .prose > :last-child { margin-bottom: 0 !important; }
 """
 
 with gr.Blocks() as demo:
-    gr.Markdown("## easy_ViTPose - Inference + JSON Overlay")
+    gr.Markdown("## easy_ViTPose Studio")
 
-    # ── Top row: input + interactive pose canvas ─────────────────────────────
-    with gr.Row():
-        with gr.Column(scale=1):
-            input_img    = gr.Image(type="pil", label="Input Image")
-            input_folder = gr.Textbox(
-                label="Image Folder Path (optional)",
-                placeholder="C:/path/to/images",
+    with gr.Tabs():
+        with gr.Tab("Pose Editörü"):
+            with gr.Row():
+                with gr.Column(scale=1):
+                    input_media = gr.File(
+                        label="Görsel veya Video Yükle",
+                        file_types=sorted(
+                            SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_VIDEO_EXTENSIONS
+                        ),
+                        type="filepath",
+                    )
+                    uploaded_video_preview = gr.Video(
+                        label="Video Önizleme",
+                        interactive=False,
+                        visible=False,
+                    )
+                    video_fps = gr.Dropdown(
+                        choices=list(range(1, 16)),
+                        value=1,
+                        label="Video Frame Çıkarma Hızı (yalnızca video)",
+                    )
+                    run_media_btn = gr.Button(
+                        "Pose Analizini Başlat",
+                        variant="primary",
+                    )
+                    with gr.Accordion("İşlenmiş Pose Videosu", open=False):
+                        processed_video = gr.Video(
+                            show_label=False,
+                            interactive=False,
+                            visible=False,
+                        )
+                    with gr.Accordion("İşlem Durumu", open=False):
+                        media_status = gr.Markdown(
+                            value="Hazır — yeni bir görsel veya video yükleyebilirsiniz.",
+                            line_breaks=True,
+                            elem_id="media-status-messagebox",
+                        )
+                        media_error = gr.Markdown(
+                            value="",
+                            line_breaks=True,
+                            visible=False,
+                            elem_id="media-error-messagebox",
+                        )
+                    json_path_box = gr.Textbox(label="Inference JSON Path", lines=2)
+                with gr.Column(scale=3):
+                    pose_editor_html = create_editor_component()
+
+            # Hidden textbox: JS canvas writes keypoints here; Python reads it.
+            kp_editor_output = gr.Textbox(
+                elem_id="kp_editor_output", elem_classes="pe-hidden-trigger", lines=1
             )
-            run_button   = gr.Button("Run ViTPose")
-            json_path_box = gr.Textbox(label="Inference JSON Path", lines=2)
-        with gr.Column(scale=2):
-            # The pose result IS the interactive editor — no separate step needed
-            pose_editor_html = create_editor_component()
+            video_frame_trigger = gr.Textbox(
+                elem_classes="pe-hidden-trigger", elem_id="video_pe_frame_trigger"
+            )
+            editor_payload_update = gr.Textbox(
+                elem_classes="pe-hidden-trigger", elem_id="pose_editor_payload_update"
+            )
+            apply_save_btn = gr.Button("✅ Apply & Save", variant="primary")
 
-    # ── Apply & Save — directly below the canvas ────────────────────────────
-    # Hidden textbox: JS canvas writes keypoints here; Python reads it.
-    kp_editor_output = gr.Textbox(
-        elem_id="kp_editor_output", elem_classes="pe-hidden-trigger", lines=1
-    )
-    with gr.Row():
-        apply_save_btn = gr.Button("✅ Apply & Save", variant="primary")
-        editor_status  = gr.Textbox(label="Editor Status", lines=1, interactive=False)
-
-    # ── Batch gallery + navigation ───────────────────────────────────────────
-    batch_gallery    = gr.Gallery(label="Batch Results (Folder Input)", columns=4, height=260)
-
-    # Hidden Textboxes for JS to trigger prev/next via change event
-    prev_trigger = gr.Textbox(elem_classes="pe-hidden-trigger", elem_id="pe_prev_trigger")
-    next_trigger = gr.Textbox(elem_classes="pe-hidden-trigger", elem_id="pe_next_trigger")
-    batch_slider     = gr.Slider(
-        label="Frame / Image Index", minimum=1, maximum=1, value=1, step=1, visible=False
-    )
-    batch_nav_status = gr.Textbox(label="Batch Navigation", lines=1, interactive=False)
-
-    # Video upload block - placed before JSON overlay tools.
-    gr.Markdown("### Video Yukleme")
-    with gr.Column():
-        input_video = gr.Video(
-            label="Video Yukle",
-            sources=["upload"],
-            interactive=True,
-            height=260,
-        )
-        video_fps = gr.Dropdown(
-            choices=list(range(1, 16)),
-            value=1,
-            label="Frame Cikarma Hizi (kare/sn)",
-        )
-        process_video_btn = gr.Button("Videodan Frame Cikar ve ViTPose Calistir", variant="primary")
-        video_path_box = gr.Textbox(label="Uploaded Video Path", lines=2, interactive=False)
-        video_status = gr.Textbox(label="Video Status", lines=7, interactive=False)
-        video_gallery = gr.Gallery(label="Video Frame Results", columns=4, height=280)
-        gr.Markdown("### Video Frame Editor")
-        video_frame_editor_html = create_editor_component()
-        video_kp_editor_output = gr.Textbox(
-            elem_id="video_kp_editor_output", elem_classes="pe-hidden-trigger", lines=1
-        )
-        video_prev_trigger = gr.Textbox(elem_classes="pe-hidden-trigger", elem_id="video_pe_prev_trigger")
-        video_next_trigger = gr.Textbox(elem_classes="pe-hidden-trigger", elem_id="video_pe_next_trigger")
-        video_frame_json_state = gr.State("")
-        video_frame_original_state = gr.State("")
-        video_frame_index_state = gr.State(0)
-        with gr.Row():
-            video_apply_save_btn = gr.Button("✅ Video Frame Apply & Save", variant="primary")
-            video_editor_status = gr.Textbox(label="Video Editor Status", lines=1, interactive=False)
+        with gr.Tab("JSON İskelet Görüntüleyici"):
+            gr.Markdown("### JSON Upload → Draw keypoints + skeleton on the image")
+            with gr.Row():
+                overlay_src_img = gr.Image(type="pil", label="Source Image")
+                json_file = gr.File(label="Upload Pose JSON (.json)", file_types=[".json"])
+                overlay_img = gr.Image(type="pil", label="Overlay Result")
+            overlay_status = gr.Textbox(label="Status", lines=2)
+            draw_button = gr.Button("Draw From Uploaded JSON", variant="primary")
 
     # State
-    batch_items_state  = gr.State([])
-    batch_index_state  = gr.State(0)
     original_img_state = gr.State("")
+    video_frame_nav_status = gr.State("")
+    video_frame_index_state = gr.State(0)
+    video_results_state = gr.State([])
+    video_result_index_state = gr.State(0)
 
-    input_video.upload(
-        fn=handle_video_upload,
-        inputs=[input_video],
-        outputs=[video_path_box, video_status],
-    )
-
-    process_video_btn.click(
-        fn=process_video_frames,
-        inputs=[video_path_box, video_fps],
+    run_media_btn.click(
+        fn=process_uploaded_media,
+        inputs=[input_media, video_fps],
         outputs=[
             pose_editor_html,
-            input_video,
-            video_gallery,
-            video_status,
-            batch_items_state,
-            batch_index_state,
-            batch_slider,
-            batch_nav_status,
+            processed_video,
+            media_status,
+            media_error,
             original_img_state,
             json_path_box,
-            video_frame_editor_html,
-            video_frame_original_state,
-            video_frame_json_state,
-            video_editor_status,
             video_frame_index_state,
+            video_results_state,
+            video_result_index_state,
+            video_frame_nav_status,
         ],
     )
 
     # ── Callbacks ────────────────────────────────────────────────────────────
-    _NAV_OUTPUTS = [
-        pose_editor_html,
-        json_path_box,
-        batch_index_state,
-        batch_slider,
-        batch_nav_status,
+    _VIDEO_FRAME_OUTPUTS = [
+        editor_payload_update,
         original_img_state,
-    ]
-    _VIDEO_EDITOR_OUTPUTS = [
-        video_frame_editor_html,
-        video_frame_original_state,
-        video_frame_json_state,
-        video_editor_status,
+        json_path_box,
         video_frame_index_state,
     ]
 
-    run_button.click(
-        fn=run_vitpose,
-        inputs=[input_img, input_folder],
+    input_media.change(
+        fn=preview_uploaded_video,
+        inputs=[input_media],
+        outputs=[uploaded_video_preview],
+        show_progress="hidden",
+        queue=False,
+    )
+
+    video_frame_trigger.change(
+        fn=_show_video_editor_item,
+        inputs=[video_results_state, video_frame_trigger],
+        outputs=_VIDEO_FRAME_OUTPUTS,
+        show_progress="hidden",
+        trigger_mode="always_last",
+        queue=False,
+    )
+
+    input_media.clear(
+        fn=reset_pose_workspace,
+        inputs=[],
         outputs=[
             pose_editor_html,
-            batch_gallery,
-            json_path_box,
-            batch_items_state,
-            batch_index_state,
-            batch_slider,
-            prev_trigger,
-            next_trigger,
-            batch_nav_status,
+            uploaded_video_preview,
+            processed_video,
+            media_status,
+            media_error,
             original_img_state,
+            json_path_box,
+            video_frame_index_state,
+            video_results_state,
+            video_result_index_state,
+            video_frame_nav_status,
+            kp_editor_output,
         ],
+        show_progress="hidden",
+        queue=False,
     )
 
-    prev_trigger.change(
-        fn=show_prev_batch,
-        inputs=[batch_items_state, batch_index_state],
-        outputs=_NAV_OUTPUTS,
-    )
+    _LOAD_EDITOR_JS = """(payload) => {
+        var w = document.querySelector('.pe-wrap');
+        if (w && payload && typeof w._peLoadPayload === 'function') {
+            w._peLoadPayload(payload);
+        }
+        return [];
+    }"""
 
-    next_trigger.change(
-        fn=show_next_batch,
-        inputs=[batch_items_state, batch_index_state],
-        outputs=_NAV_OUTPUTS,
-    )
-
-    batch_slider.change(
-        fn=show_batch_by_slider,
-        inputs=[batch_items_state, batch_slider],
-        outputs=_NAV_OUTPUTS,
-    )
-
-    video_gallery.select(
-        fn=show_video_gallery_selection,
-        inputs=[batch_items_state],
-        outputs=_VIDEO_EDITOR_OUTPUTS,
-    )
-
-    video_prev_trigger.change(
-        fn=show_prev_video_editor_item,
-        inputs=[batch_items_state, video_frame_index_state],
-        outputs=_VIDEO_EDITOR_OUTPUTS,
-    )
-
-    video_next_trigger.change(
-        fn=show_next_video_editor_item,
-        inputs=[batch_items_state, video_frame_index_state],
-        outputs=_VIDEO_EDITOR_OUTPUTS,
+    editor_payload_update.change(
+        fn=None,
+        inputs=[editor_payload_update],
+        outputs=[],
+        js=_LOAD_EDITOR_JS,
+        show_progress="hidden",
     )
 
     # Read current keypoints directly from canvas on button click.
@@ -920,41 +1235,20 @@ with gr.Blocks() as demo:
         if (w && typeof w._peGetKps === 'function') {
             kps = w._peGetKps();
         }
-        return [orig, kps, jpath, payload];
-    }"""
-
-    apply_save_btn.click(
-        fn=apply_and_save_keypoints,
-        inputs=[original_img_state, kp_editor_output, json_path_box, pose_editor_html],
-        outputs=[pose_editor_html, editor_status],
-        js=_APPLY_JS,
-    )
-
-    _APPLY_VIDEO_JS = """(orig, kps, jpath, payload) => {
-        var w = document.querySelector('.pe-wrap[data-editor-role="video"]');
-        if (w && typeof w._peGetKps === 'function') {
-            kps = w._peGetKps();
+        if (w && typeof w._peGetPayload === 'function') {
+            payload = w._peGetPayload();
         }
         return [orig, kps, jpath, payload];
     }"""
 
-    video_apply_save_btn.click(
-        fn=apply_and_save_keypoints,
-        inputs=[video_frame_original_state, video_kp_editor_output, video_frame_json_state, video_frame_editor_html],
-        outputs=[video_frame_editor_html, video_editor_status],
-        js=_APPLY_VIDEO_JS,
+    apply_save_btn.click(
+        fn=apply_and_save_for_ui,
+        inputs=[original_img_state, kp_editor_output, json_path_box, pose_editor_html],
+        outputs=[editor_payload_update, media_status, media_error],
+        js=_APPLY_JS,
+        show_progress="hidden",
     )
 
-    # ── JSON Upload overlay (standalone, has its own image input) ────────────
-    gr.Markdown("### JSON Upload → Draw keypoints + skeleton on the image")
-
-    with gr.Row():
-        overlay_src_img = gr.Image(type="pil", label="Source Image")
-        json_file       = gr.File(label="Upload Pose JSON (.json)", file_types=[".json"])
-        overlay_img     = gr.Image(type="pil", label="Overlay Result")
-    overlay_status = gr.Textbox(label="Status", lines=2)
-
-    draw_button = gr.Button("Draw From Uploaded JSON")
     draw_button.click(
         fn=draw_from_json,
         inputs=[overlay_src_img, json_file],

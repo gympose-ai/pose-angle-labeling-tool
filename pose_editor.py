@@ -43,9 +43,10 @@ _STANDARD_ANGLE_DEFINITIONS = [
 # ${value} is replaced by Gradio with the component value (base64-encoded JSON).
 # It is placed inside a hidden <div> so the canvas JS can read it from the DOM.
 EDITOR_HTML_TEMPLATE = """
-<div class="pe-wrap">
+<div class="pe-wrap pe-empty">
   <div class="pe-data" style="display:none">${value}</div>
-  <canvas class="pe-canvas"></canvas>
+  <div class="pe-empty-state">Görsel veya video yüklediğinizde pose editörü burada açılır.</div>
+  <canvas class="pe-canvas" tabindex="0"></canvas>
   <div class="pe-bar">
     <button class="pe-btn pe-reset"  data-action="reset">&#8617; Reset</button>
     <button class="pe-btn pe-names"  data-action="names">&#128065; Names</button>
@@ -55,9 +56,15 @@ EDITOR_HTML_TEMPLATE = """
     <button class="pe-btn pe-delete-angle" data-action="delete-angle">&#9003; A&#231;&#305; Sil</button>
     <button class="pe-btn pe-fullscreen" data-action="fullscreen">&#x2922; Tam Ekran</button>
     <button class="pe-btn pe-keypoints" data-action="keypoints">&#x25CF; Noktalar</button>
+    <button class="pe-btn pe-undo" data-action="undo" title="Ctrl+Z">&#8630; Geri Al</button>
+    <button class="pe-btn pe-redo" data-action="redo" title="Ctrl+Y / Ctrl+Shift+Z">&#8631; Yinele</button>
     <span class="pe-info">Goruntu yukleniyor...</span>
     <div class="pe-nav-group">
       <button class="pe-btn pe-prev" data-action="prev">&#9664; Prev</button>
+      <div class="pe-frame-control">
+        <input class="pe-frame-slider" type="range" min="0" max="0" value="0" step="1" aria-label="Video frame" />
+        <span class="pe-frame-counter">1 / 1</span>
+      </div>
       <button class="pe-btn pe-next" data-action="next">Next &#9654;</button>
     </div>
   </div>
@@ -70,6 +77,14 @@ EDITOR_CSS_TEMPLATE = """
   background: #1e1e2e; border-radius: 8px; padding: 10px;
   display: flex; flex-direction: column; gap: 8px; user-select: none;
 }
+.pe-empty-state {
+  display: none; min-height: 180px; align-items: center; justify-content: center;
+  padding: 24px; border: 2px dashed #555e6e; border-radius: 7px;
+  color: #aeb6c7; font-size: 15px; text-align: center;
+}
+.pe-wrap.pe-empty .pe-empty-state { display: flex; }
+.pe-wrap.pe-empty .pe-canvas,
+.pe-wrap.pe-empty .pe-bar { display: none; }
 .pe-canvas {
   display: block; max-width: 100%; border: 2px solid #555;
   border-radius: 4px; cursor: crosshair;
@@ -89,10 +104,31 @@ EDITOR_CSS_TEMPLATE = """
 .pe-delete-angle.is-active { outline: 2px solid #fff; box-shadow: 0 0 0 2px rgba(184,50,128,.45); }
 .pe-fullscreen { background: #e67e22; }
 .pe-keypoints { background: #d35400; }
+.pe-undo, .pe-redo { background: #4b6584; }
+.pe-canvas:focus { outline: 2px solid rgba(79,140,255,.7); outline-offset: 2px; }
 .pe-info   { font-size: 12px; color: #aaa; font-family: monospace; }
-.pe-nav-group { margin-left: auto; display: flex; gap: 6px; }
-.pe-prev   { background: #555e6e; }
-.pe-next   { background: #555e6e; }
+.pe-nav-group {
+  margin-left: auto; display: flex; gap: 8px; align-items: center;
+  flex: 1 1 440px; justify-content: flex-end;
+}
+.pe-prev, .pe-next {
+  background: #555e6e;
+  width: 108px;
+  min-width: 108px;
+  flex: 0 0 108px;
+  box-sizing: border-box;
+  text-align: center;
+}
+.pe-btn:disabled { opacity: .45; cursor: not-allowed; }
+.pe-frame-control {
+  display: none; align-items: center; gap: 8px;
+  flex: 1 1 260px; min-width: 180px; max-width: 420px;
+}
+.pe-frame-slider { flex: 1 1 auto; min-width: 120px; cursor: pointer; accent-color: #4f8cff; }
+.pe-frame-counter {
+  min-width: 58px; text-align: right; white-space: nowrap;
+  color: #c8cad3; font: 600 12px/1.2 monospace;
+}
 
 .pe-wrap:fullscreen { 
   padding: 15px; 
@@ -147,7 +183,25 @@ function bootEditor() {
   var dataEl = element.querySelector('.pe-data');
   if (!dataEl) return;
   var raw = (dataEl.textContent || '').trim();
-  if (!raw || raw.length < 20) return;
+  if (!raw || raw.length < 20) {
+    if (element._peKey === '') return;
+    element._peKey = '';
+    element._peCurrentPayload = '';
+    var emptyWrap = element.querySelector('.pe-wrap');
+    if (emptyWrap) {
+      emptyWrap.classList.add('pe-empty');
+      delete emptyWrap._peGetKps;
+      delete emptyWrap._peGetPayload;
+      delete emptyWrap._peLoadPayload;
+    }
+    var emptyCanvas = element.querySelector('.pe-canvas');
+    if (emptyCanvas) {
+      emptyCanvas.width = 1;
+      emptyCanvas.height = 1;
+      emptyCanvas.getContext('2d').clearRect(0, 0, 1, 1);
+    }
+    return;
+  }
 
   /* same payload as last init → nothing to do (e.g. info.textContent mutation) */
   if (element._peKey === raw) return;
@@ -155,6 +209,9 @@ function bootEditor() {
 
   var DATA;
   try { DATA = JSON.parse(atob(raw)); } catch(e) { return; }
+
+  var activeWrap = element.querySelector('.pe-wrap');
+  if (activeWrap) activeWrap.classList.remove('pe-empty');
 
   /* replace canvas with a clone to remove ALL stale event listeners */
   var oldCanvas = element.querySelector('.pe-canvas');
@@ -175,7 +232,16 @@ function bootEditor() {
   var outputId = DATA.output_id || 'kp_editor_output';
   var prevTriggerId = DATA.prev_trigger_id || 'pe_prev_trigger';
   var nextTriggerId = DATA.next_trigger_id || 'pe_next_trigger';
+  var frameTriggerId = DATA.frame_trigger_id || '';
+  var frameIndex = Math.max(0, Number(DATA.frame_index) || 0);
+  var frameCount = Math.max(1, Number(DATA.frame_count) || 1);
+  var requestedFrameIndex = frameIndex;
+  element._peCurrentPayload = raw;
   var dragging  = null;
+  var dragStartSnapshot = null;
+  var undoStack = [];
+  var redoStack = [];
+  var HISTORY_LIMIT = 100;
   var hoveredAngle = null;
   var angleHitboxes = [];
   var customAngleMode = false;
@@ -223,6 +289,54 @@ function bootEditor() {
 
   function kpC(i) { return 'hsl(' + Math.round(i / keypoints.length * 300) + ',80%,55%)'; }
   function skC(i) { return 'hsl(' + Math.round(i / skeleton.length  * 300) + ',70%,50%)'; }
+
+  function snapshotKeypoints() {
+    return JSON.parse(JSON.stringify(keypoints));
+  }
+
+  function sameKeypoints(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function updateHistoryControls() {
+    var undoBtn = element.querySelector('[data-action="undo"]');
+    var redoBtn = element.querySelector('[data-action="redo"]');
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+  }
+
+  function recordKeypointChange(before) {
+    if (!before || sameKeypoints(before, keypoints)) return false;
+    undoStack.push(before);
+    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+    redoStack = [];
+    updateHistoryControls();
+    return true;
+  }
+
+  function restoreKeypoints(snapshot, message) {
+    keypoints = JSON.parse(JSON.stringify(snapshot));
+    dragging = null;
+    dragStartSnapshot = null;
+    hoveredAngle = null;
+    render();
+    emitKeypointsToHiddenOutput();
+    updateHistoryControls();
+    if (info) info.textContent = message;
+  }
+
+  function undoKeypointMove() {
+    if (!undoStack.length) return;
+    redoStack.push(snapshotKeypoints());
+    restoreKeypoints(undoStack.pop(), 'Son keypoint hareketi geri alindi.');
+  }
+
+  function redoKeypointMove() {
+    if (!redoStack.length) return;
+    undoStack.push(snapshotKeypoints());
+    restoreKeypoints(redoStack.pop(), 'Keypoint hareketi yeniden uygulandi.');
+  }
+
   var ANGLE_CONF_THR = 0.01;
 
   function validAngleKeypoint(kp) {
@@ -241,8 +355,43 @@ function bootEditor() {
       deleted_standard_angles: Object.keys(deletedStandardAngles),
       manual_angles: customAngles.map(function(a) {
         return { keypoint_indices: [a[0], a[1], a[2]] };
-      })
+      }),
+      editor_role: editorRole,
+      output_id: outputId,
+      prev_trigger_id: prevTriggerId,
+      next_trigger_id: nextTriggerId,
+      frame_trigger_id: frameTriggerId,
+      frame_index: frameIndex,
+      frame_count: frameCount
     };
+  }
+
+  function updateFrameControls() {
+    var navGroup = element.querySelector('.pe-nav-group');
+    var frameControl = element.querySelector('.pe-frame-control');
+    var slider = element.querySelector('.pe-frame-slider');
+    var counter = element.querySelector('.pe-frame-counter');
+    var prevBtn = element.querySelector('[data-action="prev"]');
+    var nextBtn = element.querySelector('[data-action="next"]');
+    var videoNavigation = editorRole === 'video' && !!frameTriggerId;
+    var controlIndex = Math.max(0, Math.min(requestedFrameIndex, frameCount - 1));
+
+    if (navGroup) navGroup.style.display = videoNavigation ? 'flex' : 'none';
+    if (frameControl) frameControl.style.display = videoNavigation ? 'flex' : 'none';
+    if (slider) {
+      slider.min = '0';
+      slider.max = String(Math.max(0, frameCount - 1));
+      slider.value = String(controlIndex);
+      slider.disabled = !videoNavigation || frameCount <= 1;
+    }
+    if (counter) counter.textContent = (controlIndex + 1) + ' / ' + frameCount;
+    if (videoNavigation) {
+      if (prevBtn) prevBtn.disabled = controlIndex <= 0;
+      if (nextBtn) nextBtn.disabled = controlIndex >= frameCount - 1;
+    } else {
+      if (prevBtn) prevBtn.disabled = false;
+      if (nextBtn) nextBtn.disabled = false;
+    }
   }
 
   /* load image then size + draw canvas */
@@ -252,6 +401,7 @@ function bootEditor() {
     canvas.height = img.naturalHeight;
     render();
     emitKeypointsToHiddenOutput();
+    updateFrameControls();
     if (info) info.textContent =
       'Noktalari surukleleyin  (' + keypoints.length + ' keypoint)';
   };
@@ -260,6 +410,110 @@ function bootEditor() {
   };
   img.src = DATA.img;
 
+  function loadFramePayload(nextRaw) {
+    if (!nextRaw || nextRaw.length < 20) return;
+    var nextData;
+    try { nextData = JSON.parse(atob(nextRaw)); } catch(e) {
+      if (info) info.textContent = 'Frame verisi okunamadi!';
+      return;
+    }
+
+    var incomingFrameIndex = Math.max(0, Number(nextData.frame_index) || 0);
+    if (editorRole === 'video' && frameTriggerId && incomingFrameIndex !== requestedFrameIndex) {
+      return;
+    }
+
+    DATA = nextData;
+    element._peCurrentPayload = nextRaw;
+    origKps = JSON.parse(JSON.stringify(nextData.kps || []));
+    keypoints = JSON.parse(JSON.stringify(nextData.kps || []));
+    skeleton = nextData.sk || [];
+    names = nextData.nm || [];
+    csScale = Number(nextData.cs) || 1.0;
+    editorRole = nextData.editor_role || editorRole;
+    outputId = nextData.output_id || outputId;
+    prevTriggerId = nextData.prev_trigger_id || prevTriggerId;
+    nextTriggerId = nextData.next_trigger_id || nextTriggerId;
+    frameTriggerId = nextData.frame_trigger_id || frameTriggerId;
+    frameIndex = Math.max(0, Number(nextData.frame_index) || 0);
+    frameCount = Math.max(1, Number(nextData.frame_count) || 1);
+    requestedFrameIndex = frameIndex;
+
+    deletedStandardAngles = {};
+    (nextData.deleted_standard_angles || []).forEach(function(label) {
+      deletedStandardAngles[String(label)] = true;
+    });
+    customAngles = (nextData.manual_angles || []).map(function(a) {
+      var pts = Array.isArray(a) ? a : (a.keypoint_indices || a.points || []);
+      return [Number(pts[0]), Number(pts[1]), Number(pts[2])];
+    }).filter(function(a) {
+      return a.length === 3 && a.every(function(v) { return Number.isInteger(v); });
+    });
+    dragging = null;
+    dragStartSnapshot = null;
+    undoStack = [];
+    redoStack = [];
+    hoveredAngle = null;
+    angleHitboxes = [];
+    customAngleMode = false;
+    customAnglePick = [];
+    deleteAngleMode = false;
+    var customBtn = element.querySelector('[data-action="custom-angle"]');
+    var deleteBtn = element.querySelector('[data-action="delete-angle"]');
+    if (customBtn) customBtn.classList.remove('is-active');
+    if (deleteBtn) deleteBtn.classList.remove('is-active');
+
+    var nextImg = new window.Image();
+    nextImg.onload = function() {
+      img = nextImg;
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      updateFrameControls();
+      updateHistoryControls();
+      render();
+      emitKeypointsToHiddenOutput();
+      if (info) info.textContent =
+        'Frame ' + (frameIndex + 1) + '/' + frameCount +
+        '  |  Zoom: ' + Math.round(zoom * 100) + '%';
+    };
+    nextImg.onerror = function() {
+      if (info) info.textContent = 'Yeni frame yuklenemedi!';
+    };
+    nextImg.src = nextData.img;
+  }
+
+  function overlayMetrics() {
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (var i = 0; i < keypoints.length; i++) {
+      var kp = keypoints[i];
+      if (!kp || kp.c < 0.1) continue;
+      minX = Math.min(minX, kp.x);
+      minY = Math.min(minY, kp.y);
+      maxX = Math.max(maxX, kp.x);
+      maxY = Math.max(maxY, kp.y);
+    }
+
+    var poseSpan = Number.isFinite(minX)
+      ? Math.max(maxX - minX, maxY - minY)
+      : 0;
+    var subjectRadius = poseSpan > 0
+      ? clamp(poseSpan * 0.012, 2.75, R)
+      : R;
+    var radiusScreen = clamp(subjectRadius * zoom, 2.75, R);
+    var lineScreen = clamp(radiusScreen * 0.34, 0.9, 2.5);
+    var strokeScreen = clamp(radiusScreen * 0.22, 0.75, 1.5);
+
+    return {
+      radiusScreen: radiusScreen,
+      radiusWorld: radiusScreen / zoom,
+      hitRadiusWorld: (radiusScreen + strokeScreen / 2) / zoom,
+      lineWorld: lineScreen / zoom,
+      strokeWorld: strokeScreen / zoom,
+      dragStrokeWorld: Math.max(strokeScreen, 1.75) / zoom,
+      fontWorld: clamp(radiusScreen * 1.65, 7, 11) / zoom
+    };
+  }
+
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
@@ -267,10 +521,11 @@ function bootEditor() {
     ctx.scale(zoom, zoom);
     ctx.drawImage(img, 0, 0);
 
-    /* constant screen-space sizes regardless of zoom level */
-    var lw  = 2.5 / zoom;   /* skeleton line width  */
-    var rr  = R   / zoom;   /* keypoint dot radius  */
-    var fs  = 11  / zoom;   /* font size (px)       */
+    /* Scale overlays with the visible subject, capped for readability. */
+    var metrics = overlayMetrics();
+    var lw = metrics.lineWorld;
+    var rr = metrics.radiusWorld;
+    var fs = metrics.fontWorld;
 
     /* skeleton lines */
     if (showKeypoints) {
@@ -297,7 +552,9 @@ function bootEditor() {
         ctx.fillStyle = kpC(i);
         ctx.fill();
         ctx.strokeStyle = (dragging === i) ? '#fff' : 'rgba(255,255,255,.7)';
-        ctx.lineWidth   = (dragging === i) ? 2 / zoom : 1.5 / zoom;
+        ctx.lineWidth = (dragging === i)
+          ? metrics.dragStrokeWorld
+          : metrics.strokeWorld;
         ctx.stroke();
         if (showNames) {
           ctx.fillStyle = '#fff';
@@ -817,7 +1074,8 @@ function bootEditor() {
 
   function nearest(p) {
     if (!showKeypoints) return null;
-    var best = null, bestD = R + 15;  /* 22-px hit radius in canvas space */
+    /* Hit area is exactly the adaptive visible dot plus its stroke. */
+    var best = null, bestD = overlayMetrics().hitRadiusWorld;
     for (var i = 0; i < keypoints.length; i++) {
       var k = keypoints[i];
       if (k.c < 0.1) continue;
@@ -916,12 +1174,14 @@ function bootEditor() {
   }
 
   function finishDrag() {
+    var moved = dragging !== null && recordKeypointChange(dragStartSnapshot);
     if (dragging !== null && info)
       info.textContent = names[dragging] + '  (' +
         Math.round(keypoints[dragging].x / csScale) + ', ' +
         Math.round(keypoints[dragging].y / csScale) + ')';
-    if (dragging !== null) emitKeypointsToHiddenOutput();
+    if (dragging !== null && moved) emitKeypointsToHiddenOutput();
     dragging = null;
+    dragStartSnapshot = null;
     canvas.style.cursor = 'crosshair';
   }
 
@@ -957,6 +1217,7 @@ function bootEditor() {
 
   canvas.addEventListener('mousedown', function(e) {
     e.preventDefault();
+    try { canvas.focus({preventScroll: true}); } catch (_) { canvas.focus(); }
     if (e.button === 1) {        /* middle button → always pan */
       isPanning = true;
       panStart  = getRawPos(e);
@@ -980,8 +1241,9 @@ function bootEditor() {
       canvas.style.cursor = 'move';
       return;
     }
-    if (kpIdx !== null) {        /* left click on keypoint → drag */
+    if (kpIdx !== null && e.button === 0) {
       dragging = kpIdx;
+      dragStartSnapshot = snapshotKeypoints();
       canvas.style.cursor = 'grabbing';
       if (info) info.textContent = names[dragging] + ' surukleniyor...';
     } else {                     /* left click on empty area → pan */
@@ -1026,7 +1288,7 @@ function bootEditor() {
 
   canvas.addEventListener('mouseleave', function() {
     isPanning = false;
-    dragging  = null;
+    if (dragging !== null) finishDrag();
     hoveredAngle = null;
     canvas.style.cursor = 'crosshair';
     render();
@@ -1035,6 +1297,7 @@ function bootEditor() {
   /* touch — same rule: no info.textContent inside touchmove */
   canvas.addEventListener('touchstart', function(e) {
     e.preventDefault();
+    try { canvas.focus({preventScroll: true}); } catch (_) { canvas.focus(); }
     var touched = nearest(getPos(e));
     if (customAngleMode) {
       if (touched !== null) pickCustomAngleKeypoint(touched);
@@ -1045,6 +1308,7 @@ function bootEditor() {
       return;
     }
     dragging = touched;
+    dragStartSnapshot = dragging !== null ? snapshotKeypoints() : null;
     if (dragging !== null && info) info.textContent = names[dragging] + ' surukleniyor...';
   }, { passive: false });
 
@@ -1086,10 +1350,16 @@ function bootEditor() {
     peWrap._peGetKps = function() {
       return JSON.stringify(editorStatePayload());
     };
+    peWrap._peGetPayload = function() {
+      return element._peCurrentPayload || raw;
+    };
+    peWrap._peLoadPayload = loadFramePayload;
   }
 
   rebind('[data-action="reset"]', function() {
+    var beforeReset = snapshotKeypoints();
     keypoints = JSON.parse(JSON.stringify(origKps));
+    recordKeypointChange(beforeReset);
     zoom = 1.0; panX = 0; panY = 0;
     customAnglePick = [];
     customAngles = [];
@@ -1146,6 +1416,32 @@ function bootEditor() {
     if (info) info.textContent = showKeypoints ? 'Noktalar gosteriliyor.' : 'Noktalar gizlendi.';
   });
 
+  rebind('[data-action="undo"]', undoKeypointMove);
+  rebind('[data-action="redo"]', redoKeypointMove);
+
+  var historyKeyHandler = function(e) {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    var target = e.target;
+    if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+    var key = String(e.key || '').toLowerCase();
+    if (key === 'z' && e.shiftKey) {
+      e.preventDefault();
+      redoKeypointMove();
+    } else if (key === 'z') {
+      e.preventDefault();
+      undoKeypointMove();
+    } else if (key === 'y') {
+      e.preventDefault();
+      redoKeypointMove();
+    }
+  };
+  if (element._peHistoryKeyHandler) {
+    element.removeEventListener('keydown', element._peHistoryKeyHandler);
+  }
+  element._peHistoryKeyHandler = historyKeyHandler;
+  element.addEventListener('keydown', historyKeyHandler);
+  updateHistoryControls();
+
   function emitNavTrigger(elemId) {
     var container = document.querySelector(elemId);
     var el = container
@@ -1162,15 +1458,56 @@ function bootEditor() {
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  function emitFrameTrigger(targetIndex) {
+    if (!frameTriggerId || frameCount <= 0) return;
+    var target = Math.max(0, Math.min(Number(targetIndex) || 0, frameCount - 1));
+    if (target === requestedFrameIndex) return;
+    requestedFrameIndex = target;
+    updateFrameControls();
+    var container = document.querySelector('#' + frameTriggerId);
+    var el = container
+      ? (container.querySelector('textarea') || container.querySelector('input[type="text"]') || container.querySelector('input'))
+      : null;
+    if (!el) { console.warn('Frame trigger not found:', frameTriggerId); return; }
+    var proto = el.tagName === 'TEXTAREA'
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    var nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, String(target));
+    else el.value = String(target);
+    el.dispatchEvent(new Event('input',  { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function bindFrameSlider() {
+    var old = element.querySelector('.pe-frame-slider');
+    if (!old) return;
+    var slider = old.cloneNode(true);
+    old.parentNode.replaceChild(slider, old);
+    function requestFrame() {
+      var target = Math.max(0, Math.min(Number(slider.value) || 0, frameCount - 1));
+      var counter = element.querySelector('.pe-frame-counter');
+      if (counter) counter.textContent = (target + 1) + ' / ' + frameCount;
+      emitFrameTrigger(target);
+    }
+
+    slider.addEventListener('input', requestFrame);
+    slider.addEventListener('change', requestFrame);
+  }
+
   rebind('[data-action="prev"]', function() {
-    emitNavTrigger('#' + prevTriggerId);
-    if (info) info.textContent = 'Onceki goruntüye geçiliyor...';
+    if (editorRole === 'video' && frameTriggerId) emitFrameTrigger(requestedFrameIndex - 1);
+    else emitNavTrigger('#' + prevTriggerId);
+    if (info) info.textContent = 'Onceki goruntuye geciliyor...';
   });
 
   rebind('[data-action="next"]', function() {
-    emitNavTrigger('#' + nextTriggerId);
-    if (info) info.textContent = 'Sonraki goruntüye geçiliyor...';
+    if (editorRole === 'video' && frameTriggerId) emitFrameTrigger(requestedFrameIndex + 1);
+    else emitNavTrigger('#' + nextTriggerId);
+    if (info) info.textContent = 'Sonraki goruntuye geciliyor...';
   });
+  bindFrameSlider();
+  updateFrameControls();
 }
 
 /* run once on mount (value is empty → returns early) */
@@ -1390,6 +1727,9 @@ def prepare_editor_from_path(
     output_id: str = "kp_editor_output",
     prev_trigger_id: str = "pe_prev_trigger",
     next_trigger_id: str = "pe_next_trigger",
+    frame_trigger_id: str = "",
+    frame_index: int = 0,
+    frame_count: int = 1,
 ) -> Tuple[str, str]:
     """Build editor payload from file paths (no gr.File needed).
 
@@ -1419,14 +1759,16 @@ def prepare_editor_from_path(
     # Inline JSON parse (same logic as app.parse_pose_json)
     idx_to_name = {int(k): v for k, v in data.get("skeleton", {}).items()}
     kp_outer = data.get("keypoints", [])
-    if not kp_outer:
-        return "", "JSON'da 'keypoints' bulunamadi."
-    person_dict = kp_outer[0]
-    if not isinstance(person_dict, dict) or not person_dict:
-        return "", "JSON'da tespit edilmis kisi/keypoint yok."
-    kp_list = person_dict.get("0")
-    if kp_list is None:
-        kp_list = person_dict[next(iter(person_dict.keys()))]
+    person_dict = kp_outer[0] if kp_outer else None
+    has_detected_pose = isinstance(person_dict, dict) and bool(person_dict)
+    if has_detected_pose:
+        kp_list = person_dict.get("0")
+        if kp_list is None:
+            kp_list = person_dict[next(iter(person_dict.keys()))]
+    else:
+        # Keep no-pose video frames navigable in the same editor. Confidence 0
+        # prevents the placeholder points and skeleton from being rendered.
+        kp_list = [[0.0, 0.0, 0.0] for _ in range(25)]
     if len(kp_list) != 25:
         return "", f"Beklenen 25 keypoint, gelen: {len(kp_list)}"
     # kp_list: [[row, col, c], ...]  (model output is y,x,c order)
@@ -1460,10 +1802,14 @@ def prepare_editor_from_path(
         "output_id": output_id,
         "prev_trigger_id": prev_trigger_id,
         "next_trigger_id": next_trigger_id,
+        "frame_trigger_id": frame_trigger_id,
+        "frame_index": max(0, int(frame_index)),
+        "frame_count": max(1, int(frame_count)),
     }, separators=(",", ":"))
 
     value = base64.b64encode(payload.encode("utf-8")).decode("ascii")
-    return value, f"Editor hazir: {json_path.name}  |  scale={cs:.2f}"
+    pose_note = "" if has_detected_pose else "  |  pose bulunamadi"
+    return value, f"Editor hazir: {json_path.name}  |  scale={cs:.2f}{pose_note}"
 
 
 def _extract_existing_json_path(text: str) -> str:
@@ -1902,6 +2248,9 @@ def _build_editor_payload_from_kps(
     output_id: str = "kp_editor_output",
     prev_trigger_id: str = "pe_prev_trigger",
     next_trigger_id: str = "pe_next_trigger",
+    frame_trigger_id: str = "",
+    frame_index: int = 0,
+    frame_count: int = 1,
 ) -> Tuple[str, str]:
     """Create editor payload directly from (row, col, conf) keypoints."""
     img_path = Path((original_img_path or "").strip())
@@ -1931,6 +2280,9 @@ def _build_editor_payload_from_kps(
         "output_id": output_id,
         "prev_trigger_id": prev_trigger_id,
         "next_trigger_id": next_trigger_id,
+        "frame_trigger_id": frame_trigger_id,
+        "frame_index": max(0, int(frame_index)),
+        "frame_count": max(1, int(frame_count)),
     }, separators=(",", ":"))
 
     return base64.b64encode(payload.encode("utf-8")).decode("ascii"), "OK"
@@ -1947,6 +2299,9 @@ def _build_editor_payload_from_canvas_kps(
     output_id: str = "kp_editor_output",
     prev_trigger_id: str = "pe_prev_trigger",
     next_trigger_id: str = "pe_next_trigger",
+    frame_trigger_id: str = "",
+    frame_index: int = 0,
+    frame_count: int = 1,
 ) -> Tuple[str, str]:
     """Create editor payload from current canvas-space keypoints (x, y, c)."""
     img_path = Path((original_img_path or "").strip())
@@ -1985,6 +2340,9 @@ def _build_editor_payload_from_canvas_kps(
       "output_id": output_id,
       "prev_trigger_id": prev_trigger_id,
       "next_trigger_id": next_trigger_id,
+      "frame_trigger_id": frame_trigger_id,
+      "frame_index": max(0, int(frame_index)),
+      "frame_count": max(1, int(frame_count)),
     }, separators=(",", ":"))
 
     return base64.b64encode(payload.encode("utf-8")).decode("ascii"), "OK"
@@ -2030,6 +2388,9 @@ def apply_and_save_keypoints(
     output_id = str(payload.get("output_id") or "kp_editor_output")
     prev_trigger_id = str(payload.get("prev_trigger_id") or "pe_prev_trigger")
     next_trigger_id = str(payload.get("next_trigger_id") or "pe_next_trigger")
+    frame_trigger_id = str(payload.get("frame_trigger_id") or "")
+    frame_index = max(0, int(payload.get("frame_index") or 0))
+    frame_count = max(1, int(payload.get("frame_count") or 1))
     save_standard_angles = bool(payload.get("show_standard_angles", False))
 
     # Convert canvas coords -> image coords (row, col, c)
@@ -2102,6 +2463,9 @@ def apply_and_save_keypoints(
       output_id=output_id,
       prev_trigger_id=prev_trigger_id,
       next_trigger_id=next_trigger_id,
+      frame_trigger_id=frame_trigger_id,
+      frame_index=frame_index,
+      frame_count=frame_count,
     )
     if not new_payload:
       return current_payload, f"{status} | Canvas yenilenemedi: {prep_status}"
