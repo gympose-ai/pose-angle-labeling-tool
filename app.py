@@ -4,6 +4,10 @@ os.environ["GRADIO_DISABLE_BROTLI"] = "1"
 import json
 import time
 import uuid
+import tempfile
+import hashlib
+import queue
+import threading
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
 
@@ -12,11 +16,13 @@ import numpy as np
 import gradio as gr
 import torch
 from PIL import Image
+from ultralytics import YOLO
 
 from easy_ViTPose.inference import VitInference
 from easy_ViTPose.vit_utils.inference import NumpyEncoder
 from easy_ViTPose.vit_utils.visualization import draw_points_and_skeleton, joints_dict
 from pose_editor import prepare_editor_from_path, apply_and_save_keypoints, create_editor_component
+from athlete_tracking import AthleteTracker
 
 # --- paths ---
 BASE_DIR = Path(__file__).parent
@@ -32,12 +38,26 @@ YOLO_MODEL = BASE_DIR / "checkpoints" / "yolo11x.pt"
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".mpeg", ".mpg", ".m4v"}
 _MODEL_CACHE: Dict[str, Any] = {}
+_DETECTOR_CACHE: Dict[str, Any] = {}
+_MODEL_LOCK = threading.RLock()
 def _get_runtime_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def _get_detector(device=None):
+    """Load person detection independently of the pose model and reuse it."""
+    device = device or _get_runtime_device()
+    cache_key = f"{YOLO_MODEL}|{device}"
+    with _MODEL_LOCK:
+        if cache_key not in _DETECTOR_CACHE:
+            if not YOLO_MODEL.is_file():
+                raise FileNotFoundError(f"YOLO modeli bulunamadı: {YOLO_MODEL}")
+            _DETECTOR_CACHE[cache_key] = YOLO(str(YOLO_MODEL), task="detect")
+        return _DETECTOR_CACHE[cache_key]
 
 
 def _get_model() -> VitInference:
@@ -54,6 +74,7 @@ def _get_model() -> VitInference:
             device=device,
             is_video=False,
             single_pose=True,
+            yolo_detector=_get_detector(device),
         )
     return _MODEL_CACHE[cache_key]
 
@@ -86,6 +107,7 @@ def _save_outputs(
 def _run_inference_for_input(
     input_path: Path,
     output_dir: Optional[Path] = None,
+    bbox=None,
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     if not input_path.exists():
         return None, None, f"Input not found: {input_path}"
@@ -97,9 +119,10 @@ def _run_inference_for_input(
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
     try:
-        model = _get_model()
-        frame_keypoints = model.inference(img_rgb)
-        result_image, result_json = _save_outputs(model, input_path, frame_keypoints, output_dir)
+        with _MODEL_LOCK:
+            model = _get_model()
+            frame_keypoints = model.inference(img_rgb, bbox=bbox) if bbox is not None else model.inference(img_rgb)
+            result_image, result_json = _save_outputs(model, input_path, frame_keypoints, output_dir)
     except Exception as e:
         return None, None, f"Inference error for {input_path.name}: {e}"
 
@@ -224,6 +247,7 @@ def process_video_frames(
     video_path_text: str,
     requested_fps: float,
     progress=gr.Progress(),
+    tracking=None,
 ):
     video_path_text = (video_path_text or "").strip()
     if not video_path_text:
@@ -324,11 +348,26 @@ def process_video_frames(
     sample_interval = 1.0 / target_fps
     runtime_device = _get_runtime_device()
     t0 = time.perf_counter()
+    tracker = None
+    tracking_lost_count = 0
+    tracking_records = []
 
     while True:
         ok, frame_bgr = capture.read()
         if not ok:
             break
+
+        tracked_box = None
+        if tracking is not None:
+            if tracker is None:
+                try:
+                    tracker = AthleteTracker(frame_bgr, tracking["bbox"])
+                except (ValueError, KeyError, TypeError):
+                    capture.release()
+                    raise ValueError("Takip başlatılamadı. İlk karede atleti yeniden seçin.")
+                tracked_box = tracker.bbox
+            else:
+                tracked_box = tracker.update(frame_bgr)
 
         time_sec = frame_idx / source_fps
         if time_sec + 1e-9 >= next_sample_time:
@@ -337,10 +376,29 @@ def process_video_frames(
             cv2.imwrite(str(frame_path), frame_bgr)
 
             progress(
-                selected_count / max(1, int(duration * target_fps) or 1),
-                desc=f"Frame isleniyor: {frame_idx}",
+                0.9 * min(1, selected_count / max(1, int(duration * target_fps) or 1)),
+                desc=f"Kareler işleniyor · {selected_count + 1}. kare · {time_sec:.1f} sn",
             )
-            out_img, json_path, err = _run_inference_for_input(frame_path, run_dir)
+            if tracking is not None and tracked_box is None:
+                # Never fall back to a bystander after losing the selected athlete.
+                out_img = str(run_dir / f"{frame_path.stem}_result.png")
+                json_path = str(run_dir / f"{frame_path.stem}_result.json")
+                cv2.imwrite(out_img, frame_bgr)
+                Path(json_path).write_text(json.dumps({"keypoints": [{}],
+                    "skeleton": joints_dict()["coco_25"]["keypoints"]}), encoding="utf-8")
+                err = None
+                tracking_lost_count += 1
+            elif tracking is not None:
+                out_img, json_path, err = _run_inference_for_input(frame_path, run_dir, bbox=tracked_box)
+            else:
+                out_img, json_path, err = _run_inference_for_input(frame_path, run_dir)
+            if tracking is not None and json_path and not err:
+                tracking_info = dict(status="lost" if tracked_box is None else "tracked",
+                                     bbox=tracked_box, reason=tracker.reason, source_frame=frame_idx)
+                tracking_records.append(tracking_info)
+                frame_data = json.loads(Path(json_path).read_text(encoding="utf-8"))
+                frame_data["tracking"] = tracking_info
+                Path(json_path).write_text(json.dumps(frame_data, ensure_ascii=False), encoding="utf-8")
             if err:
                 errors.append(f"Frame {frame_idx}: {err}")
             elif out_img and json_path:
@@ -359,7 +417,7 @@ def process_video_frames(
                 if has_pose:
                     pose_video_frame_paths.append(out_img)
                     batch_items.append(editor_item)
-                else:
+                elif tracking is None or tracked_box is not None:
                     errors.append(f"{caption}: {pose_error}")
 
             selected_count += 1
@@ -368,6 +426,10 @@ def process_video_frames(
         frame_idx += 1
 
     capture.release()
+    if tracking is not None:
+        (run_dir / "tracking.json").write_text(json.dumps(dict(
+            algorithm="LK optical flow + forward/backward check + RANSAC",
+            initial_bbox=tracking["bbox"], records=tracking_records), ensure_ascii=False), encoding="utf-8")
 
     if not gallery_items:
         error_text = "\n".join(errors) if errors else "Videodan islenebilir frame uretilemedi."
@@ -393,6 +455,7 @@ def process_video_frames(
         )
 
     elapsed = time.perf_counter() - t0
+    progress(0.92, desc="Sonuç videosu hazırlanıyor…")
     pose_video_path, pose_video_error = _build_pose_video_from_frames(
         pose_video_frame_paths,
         run_dir / f"{_safe_folder_name(video_path.stem)}_pose_overlay",
@@ -400,6 +463,7 @@ def process_video_frames(
     )
     if pose_video_error:
         errors.append(f"Pose video: {pose_video_error}")
+    progress(0.97, desc="Kareler editöre hazırlanıyor…")
     for editor_idx, editor_item in enumerate(video_editor_items):
         editor_payload, _, _, editor_status = _prepare_video_editor_from_item(
             editor_item,
@@ -420,21 +484,14 @@ def process_video_frames(
     nav_status = _batch_nav_state_text(0, len(batch_items), first_item["source_name"]) if first_item else "Pose tespit edilen frame yok."
     video_result_nav_status = _batch_nav_state_text(0, len(gallery_items), gallery_items[0][1])
     status_lines = [
-        f"Video islendi: {video_path.name}",
-        f"Kaynak FPS: {source_fps:.2f}",
-        f"Istenen FPS: {target_fps:.2f}",
-        f"Toplam frame: {total_frames}",
-        f"Secilen frame: {selected_count}",
-        f"Basarili frame: {len(gallery_items)}",
-        f"Editor frame: {len(video_editor_items)}",
-        f"Pose video frame: {len(pose_video_frame_paths)}",
-        f"Hatali frame: {len(errors)}",
-        f"Device: {runtime_device}",
-        f"Cikti klasoru: {run_dir}",
-        f"Pose cikarimli resimler, JSON dosyalari ve video bu klasore kaydedildi.",
-        f"Pose video: {pose_video_path or 'olusturulamadi'}",
-        f"Toplam sure: {elapsed:.2f}s",
+        f"Video işlendi: {video_path.name}",
+        f"{len(gallery_items)}/{selected_count} kare işlendi · {len(batch_items)} karede poz bulundu · {elapsed:.1f} sn",
+        f"Kayıt klasörü: {run_dir}",
     ]
+    if not pose_video_path:
+        status_lines.append("Çıktı videosu oluşturulamadı.")
+    if tracking is not None:
+        status_lines.append(f"Atlet takibi açık · {tracking_lost_count} kare elle kontrol bekliyor.")
     if errors:
         status_lines.append("\nHatalar:")
         status_lines.extend(errors)
@@ -465,9 +522,10 @@ def process_video_for_shared_editor(
     video_path_text: str,
     requested_fps: float,
     progress=gr.Progress(),
+    tracking=None,
 ):
     """Map the video pipeline onto the single shared pose editor UI."""
-    result = process_video_frames(video_path_text, requested_fps, progress)
+    result = process_video_frames(video_path_text, requested_fps, progress, tracking=tracking)
     return (
         result[10],  # shared editor payload
         result[1],   # rendered pose video
@@ -511,23 +569,177 @@ def _status_box_updates(message: str, force_error: bool = False):
     return info_update, error_update
 
 
-def preview_uploaded_video(uploaded_file: Any):
-    """Show an immediate preview only when the shared upload is a video."""
+def prepare_editor_media(uploaded_file: Any):
+    """Confirm that editor-dropped media is uploaded and ready for inference."""
     media_path = _uploaded_file_path(uploaded_file)
-    if (
-        media_path is not None
-        and media_path.exists()
-        and media_path.is_file()
-        and media_path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
-    ):
-        return gr.update(value=str(media_path), visible=True)
-    return gr.update(value=None, visible=False)
+    if media_path is None:
+        info_update, error_update = _status_box_updates(
+            "Hazır — görsel veya videoyu editöre sürükleyebilirsiniz."
+        )
+        return (
+            "",
+            info_update,
+            error_update,
+        )
+    if not media_path.exists() or not media_path.is_file():
+        info_update, error_update = _status_box_updates(
+            "Yüklenen medya dosyası bulunamadı.",
+            force_error=True,
+        )
+        return (
+            "",
+            info_update,
+            error_update,
+        )
+
+    extension = media_path.suffix.lower()
+    supported = SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_VIDEO_EXTENSIONS
+    if extension not in supported:
+        info_update, error_update = _status_box_updates(
+            f"Desteklenmeyen dosya formatı: {extension or '(uzantı yok)' }.",
+            force_error=True,
+        )
+        return (
+            "",
+            info_update,
+            error_update,
+        )
+
+    media_kind = "video" if extension in SUPPORTED_VIDEO_EXTENSIONS else "image"
+    signal = json.dumps(
+        {"ready": True, "kind": media_kind, "name": media_path.name},
+        ensure_ascii=False,
+    )
+    info_update, error_update = _status_box_updates(
+        f"Medya hazır: {media_path.name}\nPoz tahminlemeyi editör içinden başlatabilirsiniz."
+    )
+    return (
+        signal,
+        info_update,
+        error_update,
+    )
+
+
+def suggest_tracking_box(uploaded_file, request):
+    """Suggest a person in the first frame; the user still confirms the target."""
+    response = {"request": request, "bbox": None}
+    capture = None
+    try:
+        target = json.loads(request)
+        path = _uploaded_file_path(uploaded_file)
+        if path is None or path.name != target.get("name") or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+            raise ValueError("Video hazır değil; yükleme tamamlandıktan sonra tekrar deneyin.")
+        capture = cv2.VideoCapture(str(path))
+        ok, frame = capture.read()
+        if not ok:
+            raise ValueError("İlk kare okunamadı; atleti elle seçin.")
+        h, w = frame.shape[:2]
+        with _MODEL_LOCK:
+            device = _get_runtime_device()
+            detector = _get_detector(device)
+            detections = detector(frame, verbose=False, imgsz=320,
+                                  device=device if device != 'cuda' else 0,
+                                  classes=[0])[0].boxes.data.cpu().numpy()
+        candidates = []
+        for row in detections:
+            if len(row) < 5 or not np.isfinite(row[:5]).all():
+                continue
+            x1, y1, x2, y2 = np.clip(row[:4], [0, 0, 0, 0], [w, h, w, h])
+            if row[4] < 0.35 or x2-x1 < 12 or y2-y1 < 12:
+                continue
+            candidates.append(((x2-x1)*(y2-y1)*float(row[4]), [x1/w, y1/h, x2/w, y2/h]))
+        if candidates:
+            response["bbox"] = [float(v) for v in max(candidates, key=lambda item:item[0])[1]]
+            response["message"] = "Otomatik öneri hazır. Doğru atlet değilse yeni bir kutu çizin."
+        else:
+            response["message"] = "Uygun kişi bulunamadı. Atleti kutuyla seçebilirsiniz."
+    except Exception as exc:
+        response["message"] = f"Otomatik öneri alınamadı; atleti elle seçebilirsiniz. ({exc})"
+    finally:
+        if capture is not None:
+            capture.release()
+    return json.dumps(response, ensure_ascii=False)
+
+
+def process_uploaded_media_from_editor(uploaded_file, trigger_value):
+    """Stream actual processing progress while keeping the video preview visible."""
+    try:
+        request_id = json.loads(trigger_value).get("at")
+    except (TypeError, ValueError, AttributeError):
+        request_id = None
+    events = queue.Queue()
+    def report(value, desc=""):
+        events.put(("progress", (value, desc)))
+    def work():
+        try:
+            events.put(("result", _process_uploaded_media_from_editor(uploaded_file, trigger_value, report)))
+        except Exception as exc:
+            events.put(("error", str(exc)))
+    def signal(value, message, state="running"):
+        return json.dumps(dict(request_id=request_id, value=value, message=message, state=state), ensure_ascii=False)
+    yield (*[gr.skip() for _ in range(11)], signal(None, "İşlem hazırlanıyor…"))
+    threading.Thread(target=work, daemon=True).start()
+    while True:
+        kind, data = events.get()
+        if kind == "progress":
+            value, message = data
+            yield (*[gr.skip() for _ in range(11)], signal(value, message))
+        elif kind == "result":
+            success = json.loads(data[10]).get("success", False)
+            yield (*data, signal(1 if success else None,
+                                "İşlem tamamlandı." if success else "İşlem tamamlanamadı; hata açıklamasını kontrol edin.",
+                                "complete" if success else "error"))
+            break
+        else:
+            updates = [gr.skip() for _ in range(11)]
+            updates[3] = gr.update(value=f"**Hata**\n\n{data}", visible=True)
+            updates[10] = json.dumps({"complete":True,"success":False,"at":time.time_ns()})
+            yield (*updates, signal(None, "İşlem tamamlanamadı. Hata açıklamasını kontrol edin.", "error"))
+            break
+
+
+def _process_uploaded_media_from_editor(
+    uploaded_file: Any,
+    trigger_value: str,
+    progress=gr.Progress(),
+):
+    """Run shared media inference from the editor toolbar trigger."""
+    requested_fps = 5.0
+    tracking = None
+    if isinstance(trigger_value, (int, float)):
+        requested_fps = float(trigger_value)
+    else:
+        try:
+            trigger_data = json.loads(trigger_value or "{}")
+            requested_fps = float(trigger_data.get("fps", requested_fps))
+            if trigger_data.get("tracking"):
+                tracking = {"bbox": trigger_data.get("tracking_bbox"), "name": trigger_data.get("media_name")}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    requested_fps = max(1.0, min(15.0, requested_fps))
+    progress(0, desc="Model ve medya hazırlanıyor…")
+    result = process_uploaded_media(uploaded_file, requested_fps, progress, tracking=tracking)
+    completion_signal = json.dumps({"complete": True, "success": bool(result[0]), "at": time.time_ns()})
+    return (
+        gr.update(value=result[0], visible=True) if result[0] else gr.update(),
+        result[1],
+        result[2],
+        result[3],
+        result[4],
+        result[5],
+        result[6],
+        result[7],
+        result[8],
+        result[9],
+        completion_signal,
+    )
 
 
 def process_uploaded_media(
     uploaded_file: Any,
     requested_fps: float,
     progress=gr.Progress(),
+    tracking=None,
 ):
     """Run image or video inference from the shared upload component."""
     media_path = _uploaded_file_path(uploaded_file)
@@ -554,11 +766,12 @@ def process_uploaded_media(
 
     extension = media_path.suffix.lower()
     if extension in SUPPORTED_VIDEO_EXTENSIONS:
-        result = process_video_for_shared_editor(
-            str(media_path),
-            requested_fps,
-            progress,
-        )
+        if tracking is not None and tracking.get("name") != media_path.name:
+            return error_result("Video değişti; takip edilecek atleti yeniden seçin.")
+        try:
+            result = process_video_for_shared_editor(str(media_path), requested_fps, progress, tracking=tracking)
+        except ValueError as exc:
+            return error_result(str(exc))
         info_update, error_update = _status_box_updates(result[2])
         return (
             result[0],
@@ -581,10 +794,13 @@ def process_uploaded_media(
             return error_result(f"Gorsel okunamadi: {exc}")
 
         result = run_vitpose(image, "")
-        info_update, error_update = _status_box_updates(
-            result[2],
-            force_error=not bool(result[0]),
-        )
+        # The first line remains the JSON path in state for Apply & Save.
+        # Present a readable summary separately from that internal value.
+        message = result[2]
+        if result[0]:
+            json_path, _, summary = message.partition("\n")
+            message = f"{summary}\nJSON kaydı: {json_path}"
+        info_update, error_update = _status_box_updates(message, force_error=not bool(result[0]))
         return (
             result[0],
             gr.update(value=None, visible=False),
@@ -608,13 +824,12 @@ def process_uploaded_media(
 
 
 def reset_pose_workspace():
-    """Return the pose workspace to its initial state after upload removal."""
+    """Return every pose-editor component and state to its initial value."""
     return (
-        "",
-        gr.update(value=None, visible=False),
+        gr.update(value="", visible=True),
         gr.update(value=None, visible=False),
         gr.update(
-            value="Hazır — yeni bir görsel veya video yükleyebilirsiniz.",
+            value="Hazır — görsel veya videoyu editöre sürükleyebilirsiniz.",
             visible=True,
         ),
         gr.update(value="", visible=False),
@@ -625,6 +840,8 @@ def reset_pose_workspace():
         0,
         "",
         "",
+        "",
+        None,
     )
 
 
@@ -658,7 +875,8 @@ def _prepare_video_editor_from_item(
     original_image = item.get("original_image", "")
     json_path = item.get("json_path", "")
     cached_payload = item.get("editor_payload", "")
-    if cached_payload:
+    json_stamp = Path(json_path).stat().st_mtime_ns if json_path and Path(json_path).is_file() else None
+    if cached_payload and item.get("editor_json_stamp") == json_stamp:
         return (
             cached_payload,
             original_image,
@@ -676,6 +894,8 @@ def _prepare_video_editor_from_item(
         frame_index=frame_index,
         frame_count=frame_count,
     )
+    if payload:
+        item.update(editor_payload=payload, editor_status=status, editor_json_stamp=json_stamp)
     return payload, original_image, json_path, status
 
 
@@ -690,6 +910,72 @@ def _show_video_editor_item(batch_items: List[Dict[str, str]], index: int):
         len(batch_items),
     )
     return payload, original_image, json_path, idx
+
+
+def retry_video_frame(items, request, pending=None):
+    """Preview a replacement pose; commit only the explicitly accepted preview."""
+    response = {"request": request, "payload": ""}
+    def finish(message, error=False):
+        info_update, error_update = _status_box_updates(message, force_error=error)
+        return json.dumps(response, ensure_ascii=False), info_update, error_update, pending
+
+    try:
+        target = json.loads(request)
+        index = int(target["frame_index"])
+        if not items or not 0 <= index < len(items):
+            return finish("Tekrar tahminlenecek kare bulunamadı.", True)
+        item = items[index]
+        if item["original_image"] != target["original_image"]:
+            return finish("Video değişti; açık kareden tekrar deneyin.", True)
+        action = target.get("action", "preview")
+        if action in ("accept", "discard"):
+            if not pending or pending["token"] != target.get("token") or pending["original_image"] != item["original_image"]:
+                return finish("Önizleme değişti; atleti yeniden seçin.", True)
+            if action == "discard":
+                pending = None
+                response["stage"] = "discarded"
+                return finish("Önizleme iptal edildi; önceki poz korundu.")
+            output_json = Path(item["json_path"])
+            if hashlib.sha256(output_json.read_bytes()).hexdigest() != pending["source_hash"]:
+                return finish("Kare önizlemeden sonra değişti. Mevcut kaydı korumak için atleti yeniden seçin.", True)
+            Path(item["result_image"]).write_bytes(pending["image"])
+            output_json.write_bytes(pending["json"])
+            response.update(payload=pending["payload"], stage="committed")
+            pending = None
+            return finish(f"Yeni poz kaydedildi: {item['source_name']}\nKayıt klasörü: {output_json.parent}")
+        if action != "preview":
+            return finish("Geçersiz önizleme işlemi.", True)
+        bbox = target.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            return finish("Önce atleti kapsayan bir kutu çizin.", True)
+
+        source = Path(item["original_image"])
+        output_json = Path(item["json_path"])
+        source_hash = hashlib.sha256(output_json.read_bytes()).hexdigest()
+        # Stage inference so a failed retry cannot overwrite previous files.
+        with tempfile.TemporaryDirectory(prefix=".retry-", dir=output_json.parent) as staging:
+            image_path, json_path, error = _run_inference_for_input(source, Path(staging), bbox=bbox)
+            if error:
+                return finish(f"Kare tekrar işlenemedi: {error}", True)
+            has_pose, reason = _has_pose_keypoints(json_path)
+            if not has_pose:
+                return finish(f"Bu karede yine poz bulunamadı. Tekrar deneyebilirsiniz. ({reason})")
+            refreshed = dict(item, json_path=json_path)
+            refreshed.pop("editor_payload", None)
+            payload, _, _, status = _prepare_video_editor_from_item(refreshed, index, len(items))
+            if not payload:
+                return finish(f"Kare editöre yüklenemedi: {status}", True)
+            pending = dict(token=uuid.uuid4().hex, original_image=item["original_image"],
+                           source_hash=source_hash, payload=payload,
+                           image=Path(image_path).read_bytes(), json=Path(json_path).read_bytes())
+
+        # Navigation invalidates cached payloads using the JSON file timestamp.
+        # Do not return an old copy of session state if another video was loaded.
+        response["payload"] = payload
+        response.update(stage="preview", token=pending["token"])
+        return finish("Yeni poz önizleniyor. Kaydetmek için Yeni Pozu Kullan, vazgeçmek için Önizlemeyi İptal Et seçin.")
+    except Exception as exc:
+        return finish(f"Kare tekrar tahminlenemedi: {exc}", True)
 
 
 def _show_batch_item(batch_items: List[Dict[str, str]], index: int):
@@ -836,7 +1122,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
             return (
                 "",
                 [(out_img, input_path.name)] if out_img else [],
-                f"{json_path}\nPose tespit edilemedi: {pose_error}\nDevice: {runtime_device} | Time: {elapsed:.2f}s",
+                f"Poz tespit edilemedi: {pose_error}\nSüre: {elapsed:.1f} sn",
                 [],
                 0,
                 gr.update(value=1, minimum=1, maximum=2, visible=False),
@@ -851,7 +1137,7 @@ def run_vitpose(image: Image.Image, folder_path: str):
         return (
             editor_payload,
             [(out_img, input_path.name)],
-            f"{json_path}\nDevice: {runtime_device} | Time: {elapsed:.2f}s",
+            f"{json_path}\nPoz tespiti tamamlandı · {elapsed:.1f} sn",
             [],
             0,
             gr.update(value=1, minimum=1, maximum=2, visible=False),
@@ -908,18 +1194,12 @@ def run_vitpose(image: Image.Image, folder_path: str):
         return None, [], error_text, [], 0, gr.update(value=1, minimum=1, maximum=2, visible=False), gr.update(visible=False), gr.update(visible=False), "", ""
 
     status_lines = [
-        f"Device: {runtime_device}",
-        f"Toplam görüntü: {len(image_files)}",
-        f"Başarılı: {len(gallery_items)}",
-        f"Hatalı: {len(errors)}",
+        f"{len(gallery_items)}/{len(image_files)} görüntü işlendi · {len(errors)} hata",
     ]
     elapsed = time.perf_counter() - t0
     status_lines.append(f"Toplam süre: {elapsed:.2f}s")
-    if len(gallery_items) > 0:
-        status_lines.append(f"Ortalama süre/görüntü: {elapsed / len(gallery_items):.2f}s")
     if json_paths:
-        status_lines.append("\nJSON çıktıları:")
-        status_lines.extend(json_paths)
+        status_lines.append(f"Kayıt klasörü: {Path(json_paths[0]).parent}")
     if errors:
         status_lines.append("\nHatalar:")
         status_lines.extend(errors)
@@ -1014,6 +1294,17 @@ def draw_from_json(image: Image.Image, json_file) -> Tuple[Image.Image, str]:
 
 _CSS = """
 .pe-hidden-trigger { display: none !important; }
+.pe-hidden-media-input {
+  position: fixed !important;
+  left: -10000px !important;
+  top: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+.pe-internal-output { display: none !important; }
 #media-status-messagebox,
 #media-error-messagebox {
   border: 1px solid #60a5fa !important;
@@ -1077,50 +1368,40 @@ with gr.Blocks() as demo:
 
     with gr.Tabs():
         with gr.Tab("Pose Editörü"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    input_media = gr.File(
-                        label="Görsel veya Video Yükle",
-                        file_types=sorted(
-                            SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_VIDEO_EXTENSIONS
-                        ),
-                        type="filepath",
-                    )
-                    uploaded_video_preview = gr.Video(
-                        label="Video Önizleme",
-                        interactive=False,
-                        visible=False,
-                    )
-                    video_fps = gr.Dropdown(
-                        choices=list(range(1, 16)),
-                        value=1,
-                        label="Video Frame Çıkarma Hızı (yalnızca video)",
-                    )
-                    run_media_btn = gr.Button(
-                        "Pose Analizini Başlat",
-                        variant="primary",
-                    )
-                    with gr.Accordion("İşlenmiş Pose Videosu", open=False):
-                        processed_video = gr.Video(
-                            show_label=False,
-                            interactive=False,
-                            visible=False,
-                        )
-                    with gr.Accordion("İşlem Durumu", open=False):
-                        media_status = gr.Markdown(
-                            value="Hazır — yeni bir görsel veya video yükleyebilirsiniz.",
-                            line_breaks=True,
-                            elem_id="media-status-messagebox",
-                        )
-                        media_error = gr.Markdown(
-                            value="",
-                            line_breaks=True,
-                            visible=False,
-                            elem_id="media-error-messagebox",
-                        )
-                    json_path_box = gr.Textbox(label="Inference JSON Path", lines=2)
-                with gr.Column(scale=3):
-                    pose_editor_html = create_editor_component()
+            input_media = gr.File(
+                label="Editör Medya Girişi",
+                file_types=sorted(
+                    SUPPORTED_IMAGE_EXTENSIONS | SUPPORTED_VIDEO_EXTENSIONS
+                ),
+                type="filepath",
+                elem_id="pose_media_input",
+                elem_classes=["pe-hidden-media-input"],
+                container=False,
+            )
+            pose_editor_html = create_editor_component()
+
+            with gr.Accordion("İşlem Durumu", open=True):
+                media_status = gr.Markdown(
+                    value="Hazır — görsel veya videoyu editöre sürükleyebilirsiniz.",
+                    line_breaks=True,
+                    elem_id="media-status-messagebox",
+                )
+                media_error = gr.Markdown(
+                    value="",
+                    line_breaks=True,
+                    visible=False,
+                    elem_id="media-error-messagebox",
+                )
+
+            processed_video = gr.Video(
+                interactive=False,
+                visible=False,
+                elem_classes=["pe-internal-output"],
+            )
+            json_path_box = gr.Textbox(
+                elem_classes="pe-hidden-trigger",
+                elem_id="inference_json_path",
+            )
 
             # Hidden textbox: JS canvas writes keypoints here; Python reads it.
             kp_editor_output = gr.Textbox(
@@ -1132,27 +1413,47 @@ with gr.Blocks() as demo:
             editor_payload_update = gr.Textbox(
                 elem_classes="pe-hidden-trigger", elem_id="pose_editor_payload_update"
             )
-            apply_save_btn = gr.Button("✅ Apply & Save", variant="primary")
+            pose_inference_trigger = gr.Textbox(
+                elem_classes="pe-hidden-trigger", elem_id="pose_inference_trigger"
+            )
+            media_ready_signal = gr.Textbox(
+                elem_classes="pe-hidden-trigger", elem_id="media_ready_signal"
+            )
+            inference_complete_signal = gr.Textbox(
+                elem_classes="pe-hidden-trigger", elem_id="inference_complete_signal"
+            )
+            pose_clear_trigger = gr.Textbox(
+                elem_classes="pe-hidden-trigger", elem_id="pose_clear_trigger"
+            )
+            retry_frame_trigger = gr.Textbox(
+                elem_classes="pe-hidden-trigger", elem_id="pose_retry_frame_trigger"
+            )
+            retry_frame_result = gr.Textbox(elem_classes="pe-hidden-trigger")
+            tracking_suggestion_trigger = gr.Textbox(elem_classes="pe-hidden-trigger", elem_id="tracking_suggestion_trigger")
+            tracking_suggestion_result = gr.Textbox(elem_classes="pe-hidden-trigger")
+            processing_progress_signal = gr.Textbox(elem_classes="pe-hidden-trigger")
+            apply_save_btn = gr.Button("Değişiklikleri JSON'a Kaydet", variant="primary", elem_id="pose_apply_save")
 
         with gr.Tab("JSON İskelet Görüntüleyici"):
-            gr.Markdown("### JSON Upload → Draw keypoints + skeleton on the image")
+            gr.Markdown("### JSON dosyasındaki keypointleri ve iskeleti görsel üzerinde gösterin")
             with gr.Row():
-                overlay_src_img = gr.Image(type="pil", label="Source Image")
-                json_file = gr.File(label="Upload Pose JSON (.json)", file_types=[".json"])
-                overlay_img = gr.Image(type="pil", label="Overlay Result")
-            overlay_status = gr.Textbox(label="Status", lines=2)
-            draw_button = gr.Button("Draw From Uploaded JSON", variant="primary")
+                overlay_src_img = gr.Image(type="pil", label="Kaynak görsel")
+                json_file = gr.File(label="Poz JSON dosyası (.json)", file_types=[".json"])
+                overlay_img = gr.Image(type="pil", label="İskelet çizilmiş görsel")
+            overlay_status = gr.Textbox(label="İşlem durumu", lines=2)
+            draw_button = gr.Button("JSON'dan İskeleti Çiz", variant="primary")
 
     # State
     original_img_state = gr.State("")
     video_frame_nav_status = gr.State("")
     video_frame_index_state = gr.State(0)
     video_results_state = gr.State([])
+    retry_preview_state = gr.State(None)
     video_result_index_state = gr.State(0)
 
-    run_media_btn.click(
-        fn=process_uploaded_media,
-        inputs=[input_media, video_fps],
+    pose_inference_trigger.change(
+        fn=process_uploaded_media_from_editor,
+        inputs=[input_media, pose_inference_trigger],
         outputs=[
             pose_editor_html,
             processed_video,
@@ -1164,10 +1465,27 @@ with gr.Blocks() as demo:
             video_results_state,
             video_result_index_state,
             video_frame_nav_status,
+            inference_complete_signal,
+            processing_progress_signal,
         ],
+        show_progress="hidden",
     )
 
     # ── Callbacks ────────────────────────────────────────────────────────────
+    tracking_suggestion_trigger.change(
+        fn=suggest_tracking_box, inputs=[input_media, tracking_suggestion_trigger],
+        outputs=[tracking_suggestion_result], show_progress="hidden",
+    )
+    tracking_suggestion_result.change(
+        fn=None, inputs=[tracking_suggestion_result], outputs=[],
+        js="""(signal) => { const w=document.querySelector('.pe-wrap');
+          if(w && w._peTrackingSuggestion) w._peTrackingSuggestion(signal); return []; }""",
+    )
+    processing_progress_signal.change(
+        fn=None, inputs=[processing_progress_signal], outputs=[],
+        js="""(signal) => { const w=document.querySelector('.pe-wrap');
+          if(w && w._peSetProcessingProgress) w._peSetProcessingProgress(signal); return []; }""",
+    )
     _VIDEO_FRAME_OUTPUTS = [
         editor_payload_update,
         original_img_state,
@@ -1176,9 +1494,35 @@ with gr.Blocks() as demo:
     ]
 
     input_media.change(
-        fn=preview_uploaded_video,
+        fn=prepare_editor_media,
         inputs=[input_media],
-        outputs=[uploaded_video_preview],
+        outputs=[
+            media_ready_signal,
+            media_status,
+            media_error,
+        ],
+        show_progress="hidden",
+        queue=False,
+    )
+
+    pose_clear_trigger.change(
+        fn=reset_pose_workspace,
+        inputs=[],
+        outputs=[
+            pose_editor_html,
+            processed_video,
+            media_status,
+            media_error,
+            original_img_state,
+            json_path_box,
+            video_frame_index_state,
+            video_results_state,
+            video_result_index_state,
+            video_frame_nav_status,
+            kp_editor_output,
+            media_ready_signal,
+            input_media,
+        ],
         show_progress="hidden",
         queue=False,
     )
@@ -1192,25 +1536,22 @@ with gr.Blocks() as demo:
         queue=False,
     )
 
-    input_media.clear(
-        fn=reset_pose_workspace,
-        inputs=[],
-        outputs=[
-            pose_editor_html,
-            uploaded_video_preview,
-            processed_video,
-            media_status,
-            media_error,
-            original_img_state,
-            json_path_box,
-            video_frame_index_state,
-            video_results_state,
-            video_result_index_state,
-            video_frame_nav_status,
-            kp_editor_output,
-        ],
+    retry_frame_trigger.change(
+        fn=retry_video_frame,
+        inputs=[video_results_state, retry_frame_trigger, retry_preview_state],
+        outputs=[retry_frame_result, media_status, media_error, retry_preview_state],
         show_progress="hidden",
-        queue=False,
+        trigger_mode="once",
+    )
+    retry_frame_result.change(
+        fn=None,
+        inputs=[retry_frame_result],
+        outputs=[],
+        js="""(result) => {
+            var w = document.querySelector('.pe-wrap');
+            if (w && w._peRetryComplete) w._peRetryComplete(result);
+            return [];
+        }""",
     )
 
     _LOAD_EDITOR_JS = """(payload) => {
@@ -1226,6 +1567,38 @@ with gr.Blocks() as demo:
         inputs=[editor_payload_update],
         outputs=[],
         js=_LOAD_EDITOR_JS,
+        show_progress="hidden",
+    )
+
+    _MEDIA_READY_JS = """(signal) => {
+        var w = document.querySelector('.pe-wrap');
+        if (w && typeof w._peSetMediaReady === 'function') {
+            w._peSetMediaReady(signal || '');
+        }
+        return [];
+    }"""
+
+    media_ready_signal.change(
+        fn=None,
+        inputs=[media_ready_signal],
+        outputs=[],
+        js=_MEDIA_READY_JS,
+        show_progress="hidden",
+    )
+
+    _INFERENCE_COMPLETE_JS = """(signal) => {
+        var w = document.querySelector('.pe-wrap');
+        if (w && signal && typeof w._peInferenceComplete === 'function') {
+            w._peInferenceComplete();
+        }
+        return [];
+    }"""
+
+    inference_complete_signal.change(
+        fn=None,
+        inputs=[inference_complete_signal],
+        outputs=[],
+        js=_INFERENCE_COMPLETE_JS,
         show_progress="hidden",
     )
 
@@ -1256,4 +1629,4 @@ with gr.Blocks() as demo:
     )
 
 if __name__ == "__main__":
-     demo.launch(css=_CSS)
+     demo.launch(css=_CSS, share=True)

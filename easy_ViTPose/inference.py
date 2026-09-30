@@ -87,7 +87,8 @@ class VitInference:
                  device: Optional[str] = None,
                  is_video: Optional[bool] = False,
                  single_pose: Optional[bool] = False,
-                 yolo_step: Optional[int] = 1):
+                 yolo_step: Optional[int] = 1,
+                 yolo_detector=None):
         assert os.path.isfile(model), f'The model file {model} does not exist'
         assert os.path.isfile(yolo), f'The YOLOv8 model {yolo} does not exist'
 
@@ -101,7 +102,7 @@ class VitInference:
                 device = 'cpu'
 
         self.device = device
-        self.yolo = YOLO(yolo, task='detect')
+        self.yolo = yolo_detector if yolo_detector is not None else YOLO(yolo, task='detect')
         self.yolo_size = yolo_size
         self.yolo_step = yolo_step
         self.is_video = is_video
@@ -218,7 +219,7 @@ class VitInference:
         """
         raise NotImplementedError
 
-    def inference(self, img: np.ndarray) -> dict[typing.Any, typing.Any]:
+    def inference(self, img: np.ndarray, bbox=None) -> dict[typing.Any, typing.Any]:
         """
         Perform inference on the input image.
 
@@ -229,11 +230,21 @@ class VitInference:
             dict[typing.Any, typing.Any]: Inference results.
         """
 
-        # First use YOLOv8 for detection
+        # A manual box bypasses person detection and tracking, but uses the same
+        # pose preprocessing and full-image coordinate conversion below.
         res_pd = np.empty((0, 5))
         results = None
-        if (self.tracker is None or
-           (self.frame_counter % self.yolo_step == 0 or self.frame_counter < 3)):
+        if bbox is not None:
+            box = np.asarray(bbox, dtype=float)
+            if box.shape != (4,) or not np.isfinite(box).all():
+                raise ValueError("Atlet kutusu dört sonlu koordinat içermeli.")
+            box[[0, 2]] = np.clip(box[[0, 2]], 0, img.shape[1])
+            box[[1, 3]] = np.clip(box[[1, 3]], 0, img.shape[0])
+            if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+                raise ValueError("Atleti kapsayan daha büyük bir kutu çizin.")
+            res_pd = np.array([[*box, 1.0]])
+        elif (self.tracker is None or
+              (self.frame_counter % self.yolo_step == 0 or self.frame_counter < 3)):
             results = self.yolo(img[..., ::-1], verbose=False, imgsz=self.yolo_size,
                                 device=self.device if self.device != 'cuda' else 0,
                                 classes=self.yolo_classes)[0]
@@ -244,7 +255,7 @@ class VitInference:
         frame_keypoints = {}
         scores_bbox = {}
         ids = None
-        if self.tracker is not None:
+        if self.tracker is not None and bbox is None:
             res_pd = self.tracker.update(res_pd)
             ids = res_pd[:, 5].astype(int).tolist()
 

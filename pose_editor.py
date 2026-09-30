@@ -45,27 +45,91 @@ _STANDARD_ANGLE_DEFINITIONS = [
 EDITOR_HTML_TEMPLATE = """
 <div class="pe-wrap pe-empty">
   <div class="pe-data" style="display:none">${value}</div>
-  <div class="pe-empty-state">Görsel veya video yüklediğinizde pose editörü burada açılır.</div>
+  <div class="pe-empty-state" data-action="choose-media">
+    <div class="pe-drop-icon">&#8681;</div>
+    <strong>Görsel veya videoyu buraya sürükleyin</strong>
+    <span>Dosya seçmek için bu alana da tıklayabilirsiniz.</span>
+  </div>
+  <div class="pe-local-preview">
+    <video class="pe-preview-video" controls preload="metadata"></video>
+    <img class="pe-preview-image" alt="Yüklenen medya önizlemesi" />
+    <div class="pe-processing" style="display:none">
+      <span class="pe-processing-text" role="status" aria-live="polite">İşlem hazırlanıyor…</span>
+      <progress class="pe-processing-bar" max="1" aria-label="Poz tahmini ilerlemesi"></progress>
+    </div>
+  </div>
   <canvas class="pe-canvas" tabindex="0"></canvas>
-  <div class="pe-bar">
-    <button class="pe-btn pe-reset"  data-action="reset">&#8617; Reset</button>
-    <button class="pe-btn pe-names"  data-action="names">&#128065; Names</button>
-    <button class="pe-btn pe-save"   data-action="save">&#128190; Save PNG</button>
-    <button class="pe-btn pe-angles" data-action="angles">&#128208; A&#231;&#305;lar</button>
-    <button class="pe-btn pe-custom-angle" data-action="custom-angle">&#8736; &#214;zel A&#231;&#305;</button>
+  <dialog class="pe-bbox-help pe-track-dialog" aria-label="Takip edilecek atleti seçin">
+    <h2>Takip edilecek atleti seçin</h2>
+    <p>Videonun ilk karesinde yalnızca atletin tüm vücudunu kapsayan bir kutu çizin. Takip bu seçimden başlayacak. Takip kaybolursa ilgili kareler elle kontrol için işaretlenir.</p>
+    <canvas class="pe-track-canvas" aria-label="İlk karede atlet kutusu" tabindex="0"></canvas>
+    <p class="pe-track-hint" role="status">İlk kare yükleniyor…</p>
+    <div class="pe-bbox-help-actions">
+      <button type="button" class="pe-btn pe-clear" data-action="track-cancel">Vazgeç</button>
+      <button type="button" class="pe-btn pe-retry" data-action="track-confirm" disabled>Takip Alanını Kullan</button>
+    </div>
+  </dialog>
+  <dialog class="pe-bbox-help" aria-label="Modelin çalışacağı alanı seçin">
+    <h2>Modelin çalışacağı alanı seçin</h2>
+    <p>Görüntü üzerinde sürükleyerek atletin tüm vücudunu kapsayan bir kutu çizin. Baş, eller ve ayaklar kutunun içinde kalsın.</p>
+    <p>Kutuyu çizdikten sonra <strong>Seçili Atletin Pozunu Tahminle</strong> butonuna basın. Seçimi değiştirmek için yeni bir kutu çizebilirsiniz.</p>
+    <p>Sonucu önizleyin; uygun bulursanız <strong>Yeni Pozu Kullan</strong> ile kaydedin. İptal ederseniz mevcut poz korunur.</p>
+    <label class="pe-toggle"><input type="checkbox" class="pe-bbox-help-skip" /> Bir daha gösterme</label>
+    <div class="pe-bbox-help-actions">
+      <button type="button" class="pe-btn pe-clear" data-action="bbox-help-cancel">Vazgeç</button>
+      <button type="button" class="pe-btn pe-retry" data-action="bbox-help-start" autofocus>Anladım, Alanı Seç</button>
+    </div>
+  </dialog>
+  <div class="pe-bar pe-toolbar-main">
+    <button class="pe-btn pe-clear" data-action="select-points">Noktaları Toplu Seç</button>
+    <button class="pe-btn pe-reset" data-action="delete-points" disabled title="Delete">Seçili Noktaları Sil</button>
+    <button class="pe-btn pe-reset"  data-action="reset" title="Noktaları ilk konumlarına döndürür, açı düzenlemelerini ve yakınlaştırmayı sıfırlar">&#8617; Düzenlemeleri Sıfırla</button>
+    <button class="pe-btn pe-save"   data-action="save" title="Görünen çizimi PNG olarak indirir; JSON değişikliklerini kaydetmez">&#128190; PNG İndir</button>
+    <button class="pe-btn pe-custom-angle" data-action="custom-angle" aria-pressed="false">&#8736; Özel Açı Ekle</button>
     <button class="pe-btn pe-delete-angle" data-action="delete-angle">&#9003; A&#231;&#305; Sil</button>
     <button class="pe-btn pe-fullscreen" data-action="fullscreen">&#x2922; Tam Ekran</button>
-    <button class="pe-btn pe-keypoints" data-action="keypoints">&#x25CF; Noktalar</button>
     <button class="pe-btn pe-undo" data-action="undo" title="Ctrl+Z">&#8630; Geri Al</button>
     <button class="pe-btn pe-redo" data-action="redo" title="Ctrl+Y / Ctrl+Shift+Z">&#8631; Yinele</button>
-    <span class="pe-info">Goruntu yukleniyor...</span>
+  </div>
+  <div class="pe-bar pe-toolbar-visibility" role="group" aria-label="Görünürlük">
+    <span class="pe-visibility-title">Göster:</span>
+    <div class="pe-keypoint-options">
+      <label class="pe-toggle" title="Keypoint noktalarını ve iskeleti gösterir"><input type="checkbox" data-action="keypoints" checked /> Keypointler</label>
+      <label class="pe-toggle" title="Keypointler görünürken adlarını da gösterir"><input type="checkbox" data-action="names" checked /> Keypoint adları</label>
+    </div>
+    <label class="pe-toggle"><input type="checkbox" data-action="angles" /> Standart açılar</label>
+    <label class="pe-toggle" title="Takip edilen atletin kutusunu gösterir"><input type="checkbox" data-action="athlete-box" checked /> Atlet kutusu</label>
+  </div>
+  <div class="pe-bar pe-toolbar-media">
+    <label class="pe-toggle pe-track-option" style="display:none" title="Sonraki video işlemesinde seçtiğiniz atleti takip eder"><input type="checkbox" class="pe-track-toggle" /> Atlet takibi</label>
+    <button class="pe-btn pe-clear" data-action="track-select" style="display:none">Takip Edilecek Atleti Seç</button>
+    <span class="pe-track-state pe-info" role="status"></span>
+    <button class="pe-btn pe-retry" data-action="retry-frame" style="display:none" title="Yalnızca bu kareyi işler ve sonucu aynı video klasörüne kaydeder">Bu Kareyi Tekrar Tahminle</button>
+    <button class="pe-btn pe-retry" data-action="retry-box" style="display:none">Seçili Atletin Pozunu Tahminle</button>
+    <button class="pe-btn pe-retry" data-action="accept-pose" style="display:none">Yeni Pozu Kullan</button>
+    <button class="pe-btn pe-clear" data-action="discard-pose" style="display:none">Önizlemeyi İptal Et</button>
+    <button class="pe-btn pe-clear" data-action="cancel-box" style="display:none">Seçimi İptal Et</button>
+    <button class="pe-btn pe-play" data-action="play" style="display:none">&#9654; Video Oynat</button>
+    <button class="pe-btn pe-infer" data-action="infer" disabled>&#129504; Poz Tahminlemeyi Ba&#351;lat</button>
+    <button class="pe-btn pe-clear" data-action="clear">&#10005; Ekran&#305; Temizle</button>
+    <label class="pe-fps-label" title="Videonun her saniyesinden işlenecek kare sayısı">Kare/sn
+      <select class="pe-fps-select" aria-label="Video frame çıkarma hızı">
+        <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+        <option value="4">4</option><option value="5" selected>5</option><option value="6">6</option>
+        <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+        <option value="10">10</option><option value="11">11</option><option value="12">12</option>
+        <option value="13">13</option><option value="14">14</option><option value="15">15</option>
+      </select>
+    </label>
+    <span class="pe-media-name">Bir medya dosyası bekleniyor.</span>
+    <span class="pe-info">Bir medya dosyasi bekleniyor.</span>
     <div class="pe-nav-group">
-      <button class="pe-btn pe-prev" data-action="prev">&#9664; Prev</button>
+      <button class="pe-btn pe-prev" data-action="prev">&#9664; Önceki</button>
       <div class="pe-frame-control">
         <input class="pe-frame-slider" type="range" min="0" max="0" value="0" step="1" aria-label="Video frame" />
         <span class="pe-frame-counter">1 / 1</span>
       </div>
-      <button class="pe-btn pe-next" data-action="next">Next &#9654;</button>
+      <button class="pe-btn pe-next" data-action="next">Sonraki &#9654;</button>
     </div>
   </div>
 </div>
@@ -77,16 +141,70 @@ EDITOR_CSS_TEMPLATE = """
   background: #1e1e2e; border-radius: 8px; padding: 10px;
   display: flex; flex-direction: column; gap: 8px; user-select: none;
 }
+.pe-bbox-help {
+  width: min(460px, calc(100vw - 40px)); max-height: calc(100dvh - 40px);
+  box-sizing: border-box; margin: auto; padding: 24px; overflow-y: auto;
+  border: 1px solid #555e6e; border-radius: 12px; background: #242738;
+  color: #eef0f7; box-shadow: 0 20px 60px rgba(0,0,0,.4);
+  font: 14px/1.6 sans-serif; user-select: text;
+}
+.pe-bbox-help:not([open]) { display: none; }
+.pe-bbox-help::backdrop { background: rgba(0,0,0,.55); }
+.pe-bbox-help h2 { margin: 0 0 12px; color: #fff; font-size: 20px; line-height: 1.3; }
+.pe-bbox-help p { margin: 0 0 16px; }
+.pe-bbox-help-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.pe-track-dialog { width: min(760px, calc(100vw - 40px)); }
+.pe-track-dialog .pe-track-hint {
+  position: relative; margin: 16px 0 0; padding: 14px 16px 14px 48px;
+  border: 1px solid rgba(112,183,255,.3); border-left: 3px solid #70b7ff;
+  border-radius: 10px; color: #e0edff; font-size: 13px; line-height: 1.65;
+  background: linear-gradient(120deg, rgba(59,130,246,.18), rgba(59,130,246,.07));
+  box-shadow: 0 3px 12px rgba(0,0,0,.12); overflow-wrap: anywhere;
+}
+.pe-track-dialog .pe-track-hint::before {
+  content: 'i'; position: absolute; top: 15px; left: 15px;
+  width: 20px; height: 20px; border-radius: 50%; text-align: center;
+  background: rgba(112,183,255,.2); color: #a5d2ff; font: 700 13px/20px sans-serif;
+}
+.pe-track-canvas { display: block; max-width: 100%; max-height: 55vh; width: auto; height: auto; margin: auto; touch-action: none; cursor: crosshair; }
+.pe-track-option { color: #d5d8e2; font: 13px/1.4 sans-serif; }
 .pe-empty-state {
-  display: none; min-height: 180px; align-items: center; justify-content: center;
+  display: none; min-height: 260px; align-items: center; justify-content: center;
+  flex-direction: column; gap: 8px; cursor: pointer;
   padding: 24px; border: 2px dashed #555e6e; border-radius: 7px;
   color: #aeb6c7; font-size: 15px; text-align: center;
 }
+.pe-empty-state:hover, .pe-wrap.pe-dragging .pe-empty-state {
+  border-color: #4f8cff; background: rgba(79,140,255,.08); color: #dbe7ff;
+}
+.pe-drop-icon { font-size: 34px; line-height: 1; color: #4f8cff; }
+.pe-empty-state span { font-size: 13px; color: #7f899c; }
 .pe-wrap.pe-empty .pe-empty-state { display: flex; }
-.pe-wrap.pe-empty .pe-canvas,
-.pe-wrap.pe-empty .pe-bar { display: none; }
+.pe-wrap.pe-empty .pe-canvas { display: none; }
+.pe-wrap.pe-empty:not(.pe-previewing) .pe-toolbar-main { display: none; }
+.pe-wrap.pe-empty .pe-toolbar-visibility { display: none; }
+.pe-wrap.pe-empty.pe-media-ready {
+  min-height: auto;
+}
+.pe-wrap.pe-empty.pe-media-ready .pe-empty-state { display: none; }
+.pe-wrap.pe-previewing .pe-empty-state { display: none; }
+.pe-local-preview {
+  position: relative;
+  display: none; height: clamp(220px, 45vh, 380px); align-items: center; justify-content: center;
+  overflow: hidden; border: 2px solid #555; border-radius: 7px; background: #11131a;
+}
+.pe-processing { position: absolute; bottom: 0; left: 0; right: 0; padding: 12px 16px; background: rgba(15,18,28,.9); color: #fff; font: 13px/1.5 sans-serif; }
+.pe-processing-bar { display: block; width: 100%; height: 8px; margin-top: 7px; accent-color: #70b7ff; }
+.pe-wrap.pe-previewing .pe-local-preview { display: flex; }
+.pe-wrap.pe-previewing .pe-canvas { display: none; }
+.pe-local-preview > video, .pe-local-preview > img {
+  display: none; width: 100%; height: 100%; object-fit: contain; background: #000;
+}
+.pe-wrap.pe-media-video .pe-preview-video { display: block; }
+.pe-wrap.pe-media-image .pe-preview-image { display: block; }
 .pe-canvas {
-  display: block; max-width: 100%; border: 2px solid #555;
+  display: block; max-width: 100%; max-height: min(52vh, 480px);
+  width: auto; height: auto; margin: 0 auto; border: 2px solid #555;
   border-radius: 4px; cursor: crosshair;
 }
 .pe-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -95,27 +213,62 @@ EDITOR_CSS_TEMPLATE = """
   cursor: pointer; font-size: 13px; font-weight: 600; color: #fff;
 }
 .pe-reset  { background: #c0392b; }
-.pe-names  { background: #2980b9; }
 .pe-save   { background: #8e44ad; }
-.pe-angles { background: #27ae60; }
 .pe-custom-angle { background: #16a085; }
 .pe-custom-angle.is-active { outline: 2px solid #fff; box-shadow: 0 0 0 2px rgba(22,160,133,.45); }
 .pe-delete-angle { background: #b83280; }
 .pe-delete-angle.is-active { outline: 2px solid #fff; box-shadow: 0 0 0 2px rgba(184,50,128,.45); }
 .pe-fullscreen { background: #e67e22; }
-.pe-keypoints { background: #d35400; }
+.pe-toolbar-visibility { gap: 16px; color: #d5d8e2; font: 13px/1.4 sans-serif; }
+.pe-visibility-title { color: #aeb6c7; }
+.pe-keypoint-options { display: flex; flex-wrap: wrap; gap: 12px; }
+.pe-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.pe-toggle input { width: 16px; height: 16px; margin: 0; accent-color: #4f8cff; cursor: pointer; }
+.pe-toggle:has(input:disabled) { opacity: .5; cursor: default; }
+.pe-toggle input:focus-visible, .pe-btn:focus-visible { outline: 2px solid #8bb7ff; outline-offset: 3px; }
 .pe-undo, .pe-redo { background: #4b6584; }
+.pe-play { background: #1f9d55; }
+.pe-play.is-playing { background: #c0392b; }
+.pe-infer { background: #6d5dfc; }
+.pe-retry { background: #6d5dfc; }
+.pe-clear { background: #2471a3; }
+.pe-toolbar-main, .pe-toolbar-media { width: 100%; box-sizing: border-box; }
+.pe-toolbar-media { border-top: 1px solid rgba(255,255,255,.10); padding-top: 8px; }
+.pe-fps-label {
+  display: inline-flex; align-items: center; gap: 6px; color: #c8cad3;
+  font: 600 12px/1.2 sans-serif; white-space: nowrap;
+}
+.pe-fps-select {
+  border: 1px solid #555e6e; border-radius: 5px; padding: 5px 7px;
+  background: #2b2f3a; color: #fff;
+}
+.pe-media-name {
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: #aeb6c7; font: 12px/1.2 monospace;
+}
 .pe-canvas:focus { outline: 2px solid rgba(79,140,255,.7); outline-offset: 2px; }
 .pe-info   { font-size: 12px; color: #aaa; font-family: monospace; }
 .pe-nav-group {
-  margin-left: auto; display: flex; gap: 8px; align-items: center;
+  margin-left: auto; display: none; gap: 8px; align-items: center;
+  grid-template-columns: 108px minmax(180px, 420px) 108px;
   flex: 1 1 440px; justify-content: flex-end;
 }
 .pe-prev, .pe-next {
   background: #555e6e;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 108px;
   min-width: 108px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 14px;
+  line-height: 1;
+  white-space: nowrap;
   flex: 0 0 108px;
+  align-self: center;
+  margin: 0 !important;
+  vertical-align: middle;
   box-sizing: border-box;
   text-align: center;
 }
@@ -139,6 +292,7 @@ EDITOR_CSS_TEMPLATE = """
 }
 .pe-wrap:fullscreen .pe-canvas { 
   flex-grow: 1;
+  max-height: none;
   width: 100%; 
   height: 0;
   object-fit: contain; 
@@ -148,6 +302,12 @@ EDITOR_CSS_TEMPLATE = """
 .pe-wrap:fullscreen .pe-bar {
   flex-shrink: 0;
   margin-top: 15px;
+}
+.pe-wrap:fullscreen .pe-local-preview {
+  flex: 1; height: 0; min-height: 0;
+}
+.pe-wrap:-webkit-full-screen .pe-local-preview {
+  flex: 1; height: 0; min-height: 0;
 }
 /* Safari support */
 .pe-wrap:-webkit-full-screen { 
@@ -159,6 +319,7 @@ EDITOR_CSS_TEMPLATE = """
 }
 .pe-wrap:-webkit-full-screen .pe-canvas { 
   flex-grow: 1;
+  max-height: none;
   width: 100%; 
   height: 0;
   object-fit: contain; 
@@ -179,7 +340,415 @@ EDITOR_CSS_TEMPLATE = """
 # during drag — so drag never interrupts itself.  When data genuinely
 # changes, the old canvas is replaced with a clone to strip stale listeners.
 EDITOR_JS_ON_LOAD = r"""
+function setHiddenTextValue(elemId, value) {
+  var container = document.querySelector('#' + elemId);
+  var el = container
+    ? (container.querySelector('textarea') || container.querySelector('input[type="text"]') || container.querySelector('input'))
+    : null;
+  if (!el) return false;
+  var proto = el.tagName === 'TEXTAREA'
+    ? window.HTMLTextAreaElement.prototype
+    : window.HTMLInputElement.prototype;
+  var nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value');
+  if (nativeSetter && nativeSetter.set) nativeSetter.set.call(el, String(value));
+  else el.value = String(value);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+function setupEditorMediaControls() {
+  var wrap = element.querySelector('.pe-wrap');
+  if (!wrap || element._peMediaWrap === wrap) return;
+  element._peMediaWrap = wrap;
+  // A new template needs fresh canvas handlers even if its payload is unchanged.
+  element._peKey = null;
+
+  var dropZone = wrap.querySelector('.pe-empty-state');
+  var clearBtn = wrap.querySelector('[data-action="clear"]');
+  var inferBtn = wrap.querySelector('[data-action="infer"]');
+  var nameEl = wrap.querySelector('.pe-media-name');
+  var infoEl = wrap.querySelector('.pe-info');
+  var previewBox = wrap.querySelector('.pe-local-preview');
+  var videoEl = wrap.querySelector('.pe-preview-video');
+  var imageEl = wrap.querySelector('.pe-preview-image');
+  var trackToggle = wrap.querySelector('.pe-track-toggle');
+  var trackSelect = wrap.querySelector('[data-action="track-select"]');
+  var trackDialog = wrap.querySelector('.pe-track-dialog');
+  var trackCanvas = wrap.querySelector('.pe-track-canvas');
+  var trackConfirm = wrap.querySelector('[data-action="track-confirm"]');
+  var trackHint = wrap.querySelector('.pe-track-hint');
+  var trackingImage = null, trackingBox = null, trackingStart = null;
+  var trackingEdited = false, trackingLoadId = 0;
+
+  function showStoredTrackingBox() {
+    var box = element._peTrackingBox || element._peSuggestedBox;
+    if (!trackingImage || !box || trackingEdited) return;
+    trackingBox = box.map(function(v,i) { return v * (i%2 ? trackCanvas.height : trackCanvas.width); });
+    trackConfirm.disabled = false;
+    drawTrackingSelection();
+    trackHint.textContent = element._peTrackingBox
+      ? 'Mevcut takip alanı gösteriliyor. Değiştirmek için yeni bir kutu çizin.'
+      : 'Otomatik öneri gösteriliyor. Doğru atlet değilse yeni bir kutu çizin.';
+  }
+  function requestTrackingSuggestion() {
+    if (element._peTrackingBox || element._peSuggestedBox || trackingEdited || !element._peMediaReady || element._peSuggestionRequest) return;
+    element._peSuggestionRequest = JSON.stringify({name:element._peLocalName, token:Date.now()});
+    if (setHiddenTextValue('tracking_suggestion_trigger', element._peSuggestionRequest)) {
+      trackHint.textContent = 'Atlet için otomatik kutu öneriliyor… Beklemeden elle de çizebilirsiniz.';
+    } else element._peSuggestionRequest = null;
+  }
+  wrap._peTrackingSuggestion = function(signal) {
+    var result;
+    try { result=JSON.parse(signal); } catch(_) { return; }
+    if (result.request !== element._peSuggestionRequest) return;
+    element._peSuggestionRequest = null;
+    if (trackingEdited || element._peTrackingBox) return;
+    if (result.bbox) element._peSuggestedBox = result.bbox;
+    if (trackDialog.open) {
+      if (result.bbox) showStoredTrackingBox();
+      else trackHint.textContent = result.message;
+    }
+  };
+
+  function updateTrackingControls() {
+    var isVideo = element._peLocalKind === 'video';
+    var label = wrap.querySelector('.pe-track-option');
+    if (label) label.style.display = isVideo ? 'inline-flex' : 'none';
+    if (trackToggle) {
+      trackToggle.checked = !!element._peTrackingEnabled;
+      trackToggle.disabled = !!element._peInferenceBusy;
+    }
+    if (trackSelect) {
+      trackSelect.style.display = isVideo && element._peTrackingEnabled ? '' : 'none';
+      trackSelect.disabled = !!element._peInferenceBusy;
+      trackSelect.textContent = element._peTrackingBox ? 'Takip Alanını Değiştir' : 'Takip Edilecek Atleti Seç';
+    }
+  }
+  function drawTrackingSelection() {
+    if (!trackingImage) return;
+    var c = trackCanvas.getContext('2d'), w = trackCanvas.width, h = trackCanvas.height;
+    c.clearRect(0, 0, w, h); c.drawImage(trackingImage, 0, 0);
+    if (!trackingBox) return;
+    var b = trackingBox;
+    c.fillStyle = 'rgba(0,0,0,.38)';
+    c.fillRect(0,0,w,b[1]); c.fillRect(0,b[3],w,h-b[3]);
+    c.fillRect(0,b[1],b[0],b[3]-b[1]); c.fillRect(b[2],b[1],w-b[2],b[3]-b[1]);
+    c.strokeStyle = '#70b7ff'; c.lineWidth = 2; c.strokeRect(b[0],b[1],b[2]-b[0],b[3]-b[1]);
+  }
+  function trackingPoint(e) {
+    var r = trackCanvas.getBoundingClientRect();
+    return {x: Math.max(0,Math.min(trackCanvas.width,(e.clientX-r.left)*trackCanvas.width/r.width)),
+            y: Math.max(0,Math.min(trackCanvas.height,(e.clientY-r.top)*trackCanvas.height/r.height))};
+  }
+  if (trackCanvas) {
+    trackCanvas.addEventListener('pointerdown', function(e) {
+      if (!trackingImage || e.button !== 0) return;
+      e.preventDefault(); trackCanvas.setPointerCapture(e.pointerId);
+      trackingEdited = true;
+      trackingStart = trackingPoint(e); trackingBox = null; trackConfirm.disabled = true; drawTrackingSelection();
+    });
+    trackCanvas.addEventListener('pointermove', function(e) {
+      if (!trackingStart) return;
+      var p = trackingPoint(e);
+      trackingBox = [Math.min(p.x,trackingStart.x),Math.min(p.y,trackingStart.y),Math.max(p.x,trackingStart.x),Math.max(p.y,trackingStart.y)];
+      drawTrackingSelection();
+    });
+    trackCanvas.addEventListener('pointerup', function(e) {
+      trackingStart = null;
+      if (trackCanvas.hasPointerCapture(e.pointerId)) trackCanvas.releasePointerCapture(e.pointerId);
+      var valid = trackingBox && trackingBox[2]-trackingBox[0] >= 12 && trackingBox[3]-trackingBox[1] >= 12;
+      trackConfirm.disabled = !valid;
+      trackHint.textContent = valid ? 'Atlet seçildi. Takip Alanını Kullan ile onaylayın.' : 'Atletin tüm vücudunu kapsayan daha büyük bir kutu çizin.';
+    });
+    trackCanvas.addEventListener('pointercancel', function() { trackingStart=null; trackingBox=null; trackConfirm.disabled=true; drawTrackingSelection(); });
+  }
+  function openTrackingSelection() {
+    if (element._peLocalKind !== 'video' || !element._peLocalUrl || element._peInferenceBusy) return;
+    var sourceUrl = element._peLocalUrl;
+    var loadId = ++trackingLoadId;
+    trackingEdited = false;
+    trackingImage = null; trackingBox = null; trackingStart = null;
+    trackCanvas.width = 1; trackCanvas.height = 1;
+    trackConfirm.disabled = true; trackHint.textContent = 'İlk kare yükleniyor…';
+    if (!trackDialog.open) trackDialog.showModal();
+    requestTrackingSuggestion();
+    var reader = document.createElement('video');
+    reader.muted = true; reader.preload = 'auto';
+    var timer = setTimeout(fail, 15000);
+    function cleanup() { clearTimeout(timer); reader.onloadeddata=null; reader.onerror=null; reader.removeAttribute('src'); reader.load(); }
+    function fail() {
+      if (sourceUrl === element._peLocalUrl && loadId === trackingLoadId && trackDialog.open) trackHint.textContent = 'İlk kare okunamadı. Tarayıcıda oynatılabilen bir video seçin veya takibi kapatın.';
+      cleanup();
+    }
+    reader.onerror = fail;
+    reader.onloadeddata = function() {
+      if (sourceUrl !== element._peLocalUrl || loadId !== trackingLoadId || !trackDialog.open) { cleanup(); return; }
+      var scale = Math.min(1,960/Math.max(reader.videoWidth,reader.videoHeight));
+      trackCanvas.width = Math.round(reader.videoWidth*scale); trackCanvas.height = Math.round(reader.videoHeight*scale);
+      trackingImage = document.createElement('canvas'); trackingImage.width=trackCanvas.width; trackingImage.height=trackCanvas.height;
+      trackingImage.getContext('2d').drawImage(reader,0,0,trackingImage.width,trackingImage.height);
+      drawTrackingSelection(); trackHint.textContent='Atleti kutuyla işaretleyin; diğer kişileri kutunun dışında bırakın.';
+      showStoredTrackingBox();
+      if (!trackingBox && element._peSuggestionRequest) trackHint.textContent='Otomatik öneri hazırlanıyor… Beklemeden elle çizebilirsiniz.';
+      cleanup();
+    };
+    reader.src = sourceUrl;
+  }
+  if (trackSelect) trackSelect.addEventListener('click', openTrackingSelection);
+  if (trackToggle) trackToggle.addEventListener('change', function() {
+    element._peTrackingEnabled = trackToggle.checked; updateTrackingControls();
+    if (trackToggle.checked && !element._peTrackingBox) openTrackingSelection();
+  });
+  wrap.querySelector('[data-action="track-cancel"]').addEventListener('click', function() { trackDialog.close(); });
+  if (trackConfirm) trackConfirm.addEventListener('click', function() {
+    if (!trackingBox || trackConfirm.disabled) return;
+    element._peTrackingBox = trackingBox.map(function(v,i){ return v / (i%2 ? trackCanvas.height : trackCanvas.width); });
+    trackDialog.close(); updateTrackingControls();
+    if (infoEl) infoEl.textContent = 'Takip alanı hazır. Poz tahminlemeyi başlatabilirsiniz.';
+  });
+
+  function hiddenFileInput() {
+    return document.querySelector('#pose_media_input input[type="file"]');
+  }
+
+  function applyPreviewVisibility(show) {
+    element._pePreviewVisible = !!show;
+    wrap.classList.toggle('pe-previewing', !!show);
+    if (previewBox) previewBox.style.display = show ? 'flex' : 'none';
+    var canvasEl = wrap.querySelector('.pe-canvas');
+    if (canvasEl) canvasEl.style.display = show ? 'none' : '';
+    wrap.querySelectorAll('.pe-toolbar-main button').forEach(function(button) {
+      button.disabled = (show || wrap.classList.contains('pe-empty')) && button.dataset.action !== 'fullscreen';
+    });
+    if (!show && videoEl) videoEl.pause();
+  }
+
+  function refreshPreviewDom() {
+    updateTrackingControls();
+    if (!element._peLocalUrl || !element._peLocalKind) {
+      applyPreviewVisibility(false);
+      return;
+    }
+    wrap.classList.add('pe-has-local-media');
+    wrap.classList.toggle('pe-media-video', element._peLocalKind === 'video');
+    wrap.classList.toggle('pe-media-image', element._peLocalKind === 'image');
+    if (element._peLocalKind === 'video' && videoEl) {
+      videoEl.src = element._peLocalUrl;
+      if (imageEl) imageEl.removeAttribute('src');
+    } else if (imageEl) {
+      imageEl.src = element._peLocalUrl;
+      if (videoEl) { videoEl.pause(); videoEl.removeAttribute('src'); }
+    }
+    if (nameEl && element._peLocalName) nameEl.textContent = element._peLocalName;
+    applyPreviewVisibility(element._pePreviewVisible !== false);
+  }
+
+  function stopPlaybackState() {
+    element._pePlaybackActive = false;
+    clearTimeout(element._pePlaybackTimer);
+    var playBtn = wrap.querySelector('[data-action="play"]');
+    if (playBtn) {
+      playBtn.classList.remove('is-playing');
+      playBtn.innerHTML = '&#9654; Video Oynat';
+    }
+  }
+
+  function previewLocalFile(file) {
+    if (!file) return;
+    var lowerName = String(file.name || '').toLowerCase();
+    var isVideo = (file.type || '').indexOf('video/') === 0 || /\.(mp4|avi|mov|mkv|webm|mpeg|mpg|m4v)$/.test(lowerName);
+    var isImage = (file.type || '').indexOf('image/') === 0 || /\.(jpg|jpeg|png|bmp|webp)$/.test(lowerName);
+    if (!isVideo && !isImage) {
+      if (infoEl) infoEl.textContent = 'Desteklenmeyen dosya formati.';
+      return false;
+    }
+
+    if (element._peLocalUrl) URL.revokeObjectURL(element._peLocalUrl);
+    element._peLocalUrl = URL.createObjectURL(file);
+    element._peLocalKind = isVideo ? 'video' : 'image';
+    element._peTrackingBox = null;
+    element._peSuggestedBox = null;
+    element._peSuggestionRequest = null;
+    element._peProcessingRequest = null;
+    var oldProgress = wrap.querySelector('.pe-processing');
+    if (oldProgress) oldProgress.style.display = 'none';
+    if (trackDialog.open) trackDialog.close();
+    element._peLocalName = file.name || 'Yuklenen medya';
+    element._peMediaReady = false;
+    wrap.classList.remove('pe-media-ready');
+    element._pePreviewVisible = true;
+    stopPlaybackState();
+    if (inferBtn) inferBtn.disabled = true;
+    refreshPreviewDom();
+    if (infoEl) infoEl.textContent = 'Dosya yukleniyor...';
+    return true;
+  }
+
+  function bindHiddenFileInput() {
+    var targetInput = hiddenFileInput();
+    if (!targetInput || targetInput._pePreviewWrap === wrap) return targetInput;
+    if (targetInput._pePreviewHandler) targetInput.removeEventListener('change', targetInput._pePreviewHandler);
+    targetInput._pePreviewWrap = wrap;
+    targetInput._pePreviewHandler = function() {
+      if (element._peIgnoreNextFileChange) {
+        element._peIgnoreNextFileChange = false;
+        return;
+      }
+      var files = targetInput.files;
+      if (files && files.length) previewLocalFile(files[0]);
+    };
+    targetInput.addEventListener('change', targetInput._pePreviewHandler);
+    return targetInput;
+  }
+
+  function selectLocalFile(file) {
+    if (!previewLocalFile(file)) return;
+
+    var targetInput = bindHiddenFileInput();
+    if (!targetInput) {
+      if (infoEl) infoEl.textContent = 'Medya yukleme alani bulunamadi.';
+      return;
+    }
+    var transfer = new DataTransfer();
+    transfer.items.add(file);
+    element._peIgnoreNextFileChange = true;
+    targetInput.files = transfer.files;
+    targetInput.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function openFileChooser() {
+    var targetInput = bindHiddenFileInput();
+    if (targetInput) targetInput.click();
+  }
+
+  function clearWorkspace() {
+    element._peProcessingRequest = null;
+    element._peSuggestionRequest = null;
+    element._peSuggestedBox = null;
+    element._peTrackingBox = null;
+    if (trackDialog.open) trackDialog.close();
+    element._peRetryRequest = null;
+    var applyButton = document.querySelector('#pose_apply_save');
+    if (applyButton) applyButton.disabled = false;
+    stopPlaybackState();
+    if (element._peLocalUrl) URL.revokeObjectURL(element._peLocalUrl);
+    element._peLocalUrl = null;
+    element._peLocalKind = null;
+    element._peLocalName = null;
+    element._peMediaReady = false;
+    element._pePreviewVisible = false;
+    if (videoEl) { videoEl.pause(); videoEl.removeAttribute('src'); }
+    if (imageEl) imageEl.removeAttribute('src');
+    wrap.classList.remove(
+      'pe-has-local-media', 'pe-previewing', 'pe-media-video', 'pe-media-image',
+      'pe-dragging', 'pe-media-ready'
+    );
+    wrap.classList.add('pe-empty');
+    applyPreviewVisibility(false);
+    if (inferBtn) {
+      inferBtn.disabled = true;
+      inferBtn.innerHTML = '&#129504; Poz Tahminlemeyi Ba&#351;lat';
+    }
+    if (nameEl) nameEl.textContent = 'Bir medya dosyasi bekleniyor.';
+    if (infoEl) infoEl.textContent = 'Bir medya dosyasi bekleniyor.';
+    setHiddenTextValue('pose_clear_trigger', String(Date.now()));
+  }
+
+  wrap.addEventListener('dragover', function(event) {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    wrap.classList.add('pe-dragging');
+  });
+  wrap.addEventListener('dragleave', function(event) {
+    if (!wrap.contains(event.relatedTarget)) wrap.classList.remove('pe-dragging');
+  });
+  wrap.addEventListener('drop', function(event) {
+    event.preventDefault();
+    wrap.classList.remove('pe-dragging');
+    var files = event.dataTransfer && event.dataTransfer.files;
+    if (files && files.length) selectLocalFile(files[0]);
+  });
+  bindHiddenFileInput();
+  if (dropZone) dropZone.addEventListener('click', openFileChooser);
+  if (clearBtn) clearBtn.addEventListener('click', clearWorkspace);
+  // Fullscreen is useful before inference too, while only the preview is shown.
+  wrap.addEventListener('click', function(event) {
+    var button = event.target.closest('[data-action="fullscreen"]');
+    if (!button) return;
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      if (wrap.requestFullscreen) wrap.requestFullscreen();
+      else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
+    } else {
+      if (document.exitFullscreen) document.exitFullscreen();
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }
+  });
+  if (inferBtn) inferBtn.addEventListener('click', function() {
+    if (!element._peMediaReady) {
+      if (infoEl) infoEl.textContent = 'Dosyanin yuklenmesi bekleniyor...';
+      return;
+    }
+    var fpsSelect = wrap.querySelector('.pe-fps-select');
+    var fps = fpsSelect ? Number(fpsSelect.value) || 5 : 5;
+    var tracking = element._peLocalKind === 'video' && !!element._peTrackingEnabled;
+    if (tracking && !element._peTrackingBox) { openTrackingSelection(); return; }
+    element._peInferenceBusy = true; updateTrackingControls();
+    element._peProcessingRequest = Date.now();
+    applyPreviewVisibility(true);
+    wrap._peSetProcessingProgress(JSON.stringify({request_id:element._peProcessingRequest, value:null,
+      message:'İşlem başlatılıyor…', state:'running'}));
+    inferBtn.disabled = true;
+    inferBtn.innerHTML = '&#8987; Poz Tahminleniyor...';
+    if (infoEl) infoEl.textContent = 'Poz tahminleme baslatildi...';
+    setHiddenTextValue('pose_inference_trigger', JSON.stringify({ fps: fps, at: element._peProcessingRequest,
+      tracking: tracking, tracking_bbox: tracking ? element._peTrackingBox : null, media_name: element._peLocalName }));
+  });
+
+  wrap._peSetMediaReady = function(signal) {
+    var readyData = null;
+    try { readyData = signal ? JSON.parse(signal) : null; } catch(e) { readyData = null; }
+    // An older upload must not enable inference for a newly selected file.
+    if (readyData && readyData.name !== element._peLocalName) return;
+    element._peMediaReady = !!(readyData && readyData.ready);
+    if (trackDialog.open && element._peMediaReady) requestTrackingSuggestion();
+    if (inferBtn) inferBtn.disabled = !element._peMediaReady;
+    if (readyData && readyData.name && nameEl) nameEl.textContent = readyData.name;
+    wrap.classList.toggle('pe-media-ready', element._peMediaReady);
+    element._pePreviewVisible = !!element._peLocalUrl;
+    applyPreviewVisibility(element._pePreviewVisible);
+    if (infoEl) infoEl.textContent = element._peMediaReady
+      ? 'Medya hazir. Poz tahminlemeyi baslatabilirsiniz.'
+      : 'Bir medya dosyasi bekleniyor.';
+  };
+  wrap._peInferenceComplete = function() {
+    element._peInferenceBusy = false; updateTrackingControls();
+    if (inferBtn) {
+      inferBtn.disabled = !element._peMediaReady;
+      inferBtn.innerHTML = '&#129504; Poz Tahminlemeyi Ba&#351;lat';
+    }
+  };
+  wrap._peSetProcessingProgress = function(signal) {
+    var data;
+    try { data=JSON.parse(signal); } catch(_) { return; }
+    if (data.request_id !== element._peProcessingRequest) return;
+    var panel=wrap.querySelector('.pe-processing'), bar=wrap.querySelector('.pe-processing-bar');
+    var text=wrap.querySelector('.pe-processing-text');
+    if (panel) panel.style.display='block';
+    if (text) text.textContent=data.message + (typeof data.value === 'number' ? ' · %' + Math.round(data.value*100) : '');
+    if (bar) {
+      if (typeof data.value === 'number') bar.value=Math.max(0,Math.min(1,data.value));
+      else bar.removeAttribute('value');
+      bar.style.display=data.state === 'error' ? 'none' : 'block';
+    }
+    if (data.state !== 'running') wrap._peInferenceComplete();
+  };
+
+  refreshPreviewDom();
+}
+
 function bootEditor() {
+  setupEditorMediaControls();
   var dataEl = element.querySelector('.pe-data');
   if (!dataEl) return;
   var raw = (dataEl.textContent || '').trim();
@@ -211,7 +780,22 @@ function bootEditor() {
   try { DATA = JSON.parse(atob(raw)); } catch(e) { return; }
 
   var activeWrap = element.querySelector('.pe-wrap');
-  if (activeWrap) activeWrap.classList.remove('pe-empty');
+  if (activeWrap) {
+    activeWrap.classList.remove('pe-empty');
+    activeWrap.classList.remove('pe-media-ready');
+    activeWrap.classList.remove('pe-previewing');
+    element._pePreviewVisible = false;
+    var localPreviewBox = activeWrap.querySelector('.pe-local-preview');
+    if (localPreviewBox) localPreviewBox.style.display = 'none';
+    var activeCanvas = activeWrap.querySelector('.pe-canvas');
+    if (activeCanvas) activeCanvas.style.display = '';
+    var localPreviewVideo = activeWrap.querySelector('.pe-preview-video');
+    if (localPreviewVideo) localPreviewVideo.pause();
+    activeWrap.querySelectorAll('.pe-toolbar-main button').forEach(function(button) {
+      button.disabled = false;
+    });
+    if (activeWrap._peInferenceComplete) activeWrap._peInferenceComplete();
+  }
 
   /* replace canvas with a clone to remove ALL stale event listeners */
   var oldCanvas = element.querySelector('.pe-canvas');
@@ -236,8 +820,16 @@ function bootEditor() {
   var frameIndex = Math.max(0, Number(DATA.frame_index) || 0);
   var frameCount = Math.max(1, Number(DATA.frame_count) || 1);
   var requestedFrameIndex = frameIndex;
+  element._pePlaybackActive = false;
+  clearTimeout(element._pePlaybackTimer);
   element._peCurrentPayload = raw;
   var dragging  = null;
+  var bboxMode = false;
+  var bboxPurpose = 'athlete';
+  var selectedPoints = [];
+  var retryPreview = null;
+  var bboxStart = null;
+  var selectedBbox = null;
   var dragStartSnapshot = null;
   var undoStack = [];
   var redoStack = [];
@@ -258,6 +850,7 @@ function bootEditor() {
     return a.length === 3 && a.every(function(v) { return Number.isInteger(v); });
   });
   var showNames  = true;
+  var showAthleteBox = element._peShowAthleteBox !== false;
   var showAngles = false;
   var showKeypoints = true;
 
@@ -301,8 +894,8 @@ function bootEditor() {
   function updateHistoryControls() {
     var undoBtn = element.querySelector('[data-action="undo"]');
     var redoBtn = element.querySelector('[data-action="redo"]');
-    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
-    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0 || !!retryPreview || !!element._peRetryRequest;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0 || !!retryPreview || !!element._peRetryRequest;
   }
 
   function recordKeypointChange(before) {
@@ -315,6 +908,7 @@ function bootEditor() {
   }
 
   function restoreKeypoints(snapshot, message) {
+    clearBboxSelection();
     keypoints = JSON.parse(JSON.stringify(snapshot));
     dragging = null;
     dragStartSnapshot = null;
@@ -322,19 +916,20 @@ function bootEditor() {
     render();
     emitKeypointsToHiddenOutput();
     updateHistoryControls();
+    updateFrameControls();
     if (info) info.textContent = message;
   }
 
   function undoKeypointMove() {
     if (!undoStack.length) return;
     redoStack.push(snapshotKeypoints());
-    restoreKeypoints(undoStack.pop(), 'Son keypoint hareketi geri alindi.');
+    restoreKeypoints(undoStack.pop(), 'Son nokta düzenlemesi geri alındı.');
   }
 
   function redoKeypointMove() {
     if (!redoStack.length) return;
     undoStack.push(snapshotKeypoints());
-    restoreKeypoints(redoStack.pop(), 'Keypoint hareketi yeniden uygulandi.');
+    restoreKeypoints(redoStack.pop(), 'Nokta düzenlemesi yeniden uygulandı.');
   }
 
   var ANGLE_CONF_THR = 0.01;
@@ -367,16 +962,50 @@ function bootEditor() {
   }
 
   function updateFrameControls() {
+    var trackingState = element.querySelector('.pe-track-state');
+    if (trackingState) trackingState.textContent = DATA.tracking
+      ? (DATA.tracking.status === 'lost' ? 'Takip kayıp — bu kareyi elle kontrol edin' : 'Atlet takip ediliyor') : '';
+    var applyButton = document.querySelector('#pose_apply_save');
+    if (applyButton) applyButton.disabled = !!retryPreview || !!element._peRetryRequest;
+    element.querySelectorAll('.pe-toolbar-main button').forEach(function(button) {
+      button.disabled = !!retryPreview || !!element._peRetryRequest;
+    });
+    updateHistoryControls();
+    var deletePointsBtn = element.querySelector('[data-action="delete-points"]');
+    if (deletePointsBtn) deletePointsBtn.disabled = !selectedPoints.length || !!retryPreview || !!element._peRetryRequest;
+    ['accept-pose', 'discard-pose'].forEach(function(action) {
+      var button = element.querySelector('[data-action="' + action + '"]');
+      if (button) { button.style.display = retryPreview ? '' : 'none'; button.disabled = !!element._peRetryRequest; }
+    });
+    var retryBtn = element.querySelector('[data-action="retry-frame"]');
+    if (retryBtn) {
+      retryBtn.style.display = editorRole === 'video' && !bboxMode && !retryPreview ? '' : 'none';
+      retryBtn.disabled = !!element._peRetryRequest || requestedFrameIndex !== frameIndex;
+      retryBtn.textContent = element._peRetryRequest ? 'Kare işleniyor…' : (DATA.has_detected_pose === false ? 'Bu Kareyi Tekrar Tahminle' : 'Atleti Yeniden Seç');
+    }
+    var boxBtn = element.querySelector('[data-action="retry-box"]');
+    var cancelBoxBtn = element.querySelector('[data-action="cancel-box"]');
+    if (boxBtn) {
+      boxBtn.style.display = bboxMode && bboxPurpose === 'athlete' ? '' : 'none';
+      boxBtn.disabled = !!element._peRetryRequest || !selectedBbox || !!bboxStart || requestedFrameIndex !== frameIndex;
+      boxBtn.textContent = element._peRetryRequest ? 'Kare tahminleniyor…' : 'Seçili Atletin Pozunu Tahminle';
+    }
+    if (cancelBoxBtn) {
+      cancelBoxBtn.style.display = bboxMode ? '' : 'none';
+      cancelBoxBtn.disabled = !!element._peRetryRequest;
+    }
     var navGroup = element.querySelector('.pe-nav-group');
     var frameControl = element.querySelector('.pe-frame-control');
     var slider = element.querySelector('.pe-frame-slider');
     var counter = element.querySelector('.pe-frame-counter');
     var prevBtn = element.querySelector('[data-action="prev"]');
     var nextBtn = element.querySelector('[data-action="next"]');
-    var videoNavigation = editorRole === 'video' && !!frameTriggerId;
+    var playBtn = element.querySelector('[data-action="play"]');
+    var videoNavigation = editorRole === 'video' && !!frameTriggerId && frameCount > 1;
     var controlIndex = Math.max(0, Math.min(requestedFrameIndex, frameCount - 1));
 
-    if (navGroup) navGroup.style.display = videoNavigation ? 'flex' : 'none';
+    if (navGroup) navGroup.style.display = videoNavigation ? 'grid' : 'none';
+    if (playBtn) playBtn.style.display = videoNavigation ? '' : 'none';
     if (frameControl) frameControl.style.display = videoNavigation ? 'flex' : 'none';
     if (slider) {
       slider.min = '0';
@@ -392,6 +1021,31 @@ function bootEditor() {
       if (prevBtn) prevBtn.disabled = false;
       if (nextBtn) nextBtn.disabled = false;
     }
+  }
+
+  function setPlaybackActive(active) {
+    element._pePlaybackActive = !!active;
+    if (!active) clearTimeout(element._pePlaybackTimer);
+    var playBtn = element.querySelector('[data-action="play"]');
+    if (playBtn) {
+      playBtn.classList.toggle('is-playing', !!active);
+      playBtn.innerHTML = active ? '&#10074;&#10074; Durdur' : '&#9654; Video Oynat';
+    }
+  }
+
+  function schedulePlaybackNext() {
+    clearTimeout(element._pePlaybackTimer);
+    if (!element._pePlaybackActive) return;
+    if (frameIndex >= frameCount - 1) {
+      setPlaybackActive(false);
+      return;
+    }
+    var fpsSelect = element.querySelector('.pe-fps-select');
+    var playbackFps = fpsSelect ? Number(fpsSelect.value) || 5 : 5;
+    var delay = Math.max(80, Math.round(1000 / playbackFps));
+    element._pePlaybackTimer = setTimeout(function() {
+      if (element._pePlaybackActive) emitFrameTrigger(frameIndex + 1);
+    }, delay);
   }
 
   /* load image then size + draw canvas */
@@ -424,6 +1078,8 @@ function bootEditor() {
     }
 
     DATA = nextData;
+    retryPreview = null;
+    clearBboxSelection();
     element._peCurrentPayload = nextRaw;
     origKps = JSON.parse(JSON.stringify(nextData.kps || []));
     keypoints = JSON.parse(JSON.stringify(nextData.kps || []));
@@ -475,6 +1131,7 @@ function bootEditor() {
       if (info) info.textContent =
         'Frame ' + (frameIndex + 1) + '/' + frameCount +
         '  |  Zoom: ' + Math.round(zoom * 100) + '%';
+      schedulePlaybackNext();
     };
     nextImg.onerror = function() {
       if (info) info.textContent = 'Yeni frame yuklenemedi!';
@@ -515,11 +1172,21 @@ function bootEditor() {
   }
 
   function render() {
+    syncVisibilityControls();
+    var editingKeypoints = keypoints;
+    if (retryPreview) keypoints = retryPreview.kps;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
     ctx.translate(panX, panY);
     ctx.scale(zoom, zoom);
     ctx.drawImage(img, 0, 0);
+    if (showAthleteBox && !bboxMode && !retryPreview && DATA.tracking && DATA.tracking.bbox) {
+      var tracked = DATA.tracking.bbox.map(function(v) { return v * csScale; });
+      ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 2 / zoom;
+      ctx.setLineDash([6 / zoom, 4 / zoom]);
+      ctx.strokeRect(tracked[0], tracked[1], tracked[2]-tracked[0], tracked[3]-tracked[1]);
+      ctx.setLineDash([]);
+    }
 
     /* Scale overlays with the visible subject, capped for readability. */
     var metrics = overlayMetrics();
@@ -556,6 +1223,11 @@ function bootEditor() {
           ? metrics.dragStrokeWorld
           : metrics.strokeWorld;
         ctx.stroke();
+        if (!retryPreview && selectedPoints.indexOf(i) !== -1) {
+          ctx.beginPath();
+          ctx.arc(kp.x, kp.y, rr + 4 / zoom, 0, 2 * Math.PI);
+          ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 2 / zoom; ctx.stroke();
+        }
         if (showNames) {
           ctx.fillStyle = '#fff';
           ctx.font = fs + 'px sans-serif';
@@ -564,12 +1236,25 @@ function bootEditor() {
       }
     }
     angleHitboxes = [];
-    drawAngles();
-    drawDerivedMetrics();
-    drawCustomAngles();
-    drawCustomAnglePick();
-    drawAngleTooltip();
+    if (!retryPreview) {
+      drawAngles(); drawDerivedMetrics(); drawCustomAngles(); drawCustomAnglePick(); drawAngleTooltip();
+    }
+    if (bboxMode && selectedBbox) {
+      var box = selectedBbox;
+      // Shade only the four areas outside the selection, leaving its pixels intact.
+      ctx.fillStyle = 'rgba(0,0,0,.38)';
+      ctx.fillRect(0, 0, canvas.width, box[1]);
+      ctx.fillRect(0, box[3], canvas.width, canvas.height - box[3]);
+      ctx.fillRect(0, box[1], box[0], box[3] - box[1]);
+      ctx.fillRect(box[2], box[1], canvas.width - box[2], box[3] - box[1]);
+      ctx.strokeStyle = '#70b7ff';
+      ctx.lineWidth = 2 / zoom;
+      ctx.setLineDash([6 / zoom, 4 / zoom]);
+      ctx.strokeRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
+      ctx.setLineDash([]);
+    }
     ctx.restore();
+    keypoints = editingKeypoints;
   }
 
   /* ── 2-D joint-angle helpers ─────────────────────────────────────────── */
@@ -1072,6 +1757,70 @@ function bootEditor() {
     return { x: (raw.x - panX) / zoom, y: (raw.y - panY) / zoom };
   }
 
+  function clearBboxSelection() {
+    var helpDialog = element.querySelector('.pe-bbox-help');
+    if (helpDialog && helpDialog.open) helpDialog.close();
+    bboxMode = false;
+    bboxStart = null;
+    selectedBbox = null;
+    selectedPoints = [];
+    canvas.style.touchAction = '';
+  }
+
+  function bboxPoint(e) {
+    var point = getPos(e);
+    return {x: clamp(point.x, 0, canvas.width), y: clamp(point.y, 0, canvas.height)};
+  }
+  canvas.addEventListener('pointerdown', function(e) {
+    if (!bboxMode || element._peRetryRequest || e.button !== 0 || requestedFrameIndex !== frameIndex) return;
+    e.preventDefault();
+    canvas.focus({preventScroll: true});
+    canvas.setPointerCapture(e.pointerId);
+    bboxStart = bboxPoint(e);
+    selectedBbox = null;
+    selectedPoints = [];
+    updateFrameControls();
+    render();
+  });
+  canvas.addEventListener('pointermove', function(e) {
+    if (!bboxMode || !bboxStart) return;
+    var point = bboxPoint(e);
+    selectedBbox = [Math.min(bboxStart.x, point.x), Math.min(bboxStart.y, point.y),
+                    Math.max(bboxStart.x, point.x), Math.max(bboxStart.y, point.y)];
+    render();
+  });
+  canvas.addEventListener('pointerup', function(e) {
+    if (!bboxMode || !bboxStart) return;
+    bboxStart = null;
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    if (bboxPurpose === 'points') {
+      selectedPoints = [];
+      if (selectedBbox) keypoints.forEach(function(kp, index) {
+        if (kp.c >= 0.1 && kp.x >= selectedBbox[0] && kp.x <= selectedBbox[2] &&
+            kp.y >= selectedBbox[1] && kp.y <= selectedBbox[3]) selectedPoints.push(index);
+      });
+      if (info) info.textContent = selectedPoints.length + ' nokta seçildi. Silmek için Delete; vazgeçmek için Esc.';
+    } else if (!selectedBbox || (selectedBbox[2] - selectedBbox[0]) / csScale < 8 ||
+        (selectedBbox[3] - selectedBbox[1]) / csScale < 8) {
+      selectedBbox = null;
+      if (info) info.textContent = 'Atletin tüm vücudunu kapsayan daha büyük bir kutu çizin.';
+    } else if (info) info.textContent = 'Kutu hazır. Tahmini başlatın veya yeni bir kutu çizin.';
+    updateFrameControls();
+    render();
+  });
+  canvas.addEventListener('pointercancel', function() {
+    bboxStart = null;
+    selectedBbox = null;
+    selectedPoints = [];
+    updateFrameControls();
+    render();
+  });
+  canvas.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && bboxMode && !element._peRetryRequest) {
+      clearBboxSelection(); updateFrameControls(); render();
+    }
+  });
+
   function nearest(p) {
     if (!showKeypoints) return null;
     /* Hit area is exactly the adaptive visible dot plus its stroke. */
@@ -1093,7 +1842,10 @@ function bootEditor() {
     customAnglePick = [];
     if (customAngleMode) showKeypoints = true;
     var btn = element.querySelector('[data-action="custom-angle"]');
-    if (btn) btn.classList.toggle('is-active', customAngleMode);
+    if (btn) {
+      btn.classList.toggle('is-active', customAngleMode);
+      btn.setAttribute('aria-pressed', String(customAngleMode));
+    }
     canvas.style.cursor = customAngleMode ? 'copy' : 'crosshair';
     render();
     if (info) {
@@ -1113,7 +1865,10 @@ function bootEditor() {
     var deleteBtn = element.querySelector('[data-action="delete-angle"]');
     if (deleteBtn) deleteBtn.classList.toggle('is-active', deleteAngleMode);
     var customBtn = element.querySelector('[data-action="custom-angle"]');
-    if (customBtn) customBtn.classList.toggle('is-active', customAngleMode);
+    if (customBtn) {
+      customBtn.classList.toggle('is-active', customAngleMode);
+      customBtn.setAttribute('aria-pressed', String(customAngleMode));
+    }
     canvas.style.cursor = deleteAngleMode ? 'not-allowed' : (customAngleMode ? 'copy' : 'crosshair');
     render();
     if (info) {
@@ -1139,7 +1894,7 @@ function bootEditor() {
     hoveredAngle = null;
     render();
     emitKeypointsToHiddenOutput();
-    if (info) info.textContent = hit.label + ' silindi. Kaydetmek icin Apply & Save kullanin.';
+    if (info) info.textContent = hit.label + ' silindi. Değişiklikleri JSON\'a Kaydet butonuyla kaydedebilirsiniz.';
   }
 
   function pickCustomAngleKeypoint(idx) {
@@ -1216,6 +1971,7 @@ function bootEditor() {
   });
 
   canvas.addEventListener('mousedown', function(e) {
+    if (bboxMode || retryPreview || element._peRetryRequest) return;
     e.preventDefault();
     try { canvas.focus({preventScroll: true}); } catch (_) { canvas.focus(); }
     if (e.button === 1) {        /* middle button → always pan */
@@ -1255,6 +2011,7 @@ function bootEditor() {
   });
 
   canvas.addEventListener('mousemove', function(e) {
+    if (bboxMode || retryPreview || element._peRetryRequest) return;
     e.preventDefault();
     if (isPanning) {
       var raw = getRawPos(e);
@@ -1296,6 +2053,7 @@ function bootEditor() {
 
   /* touch — same rule: no info.textContent inside touchmove */
   canvas.addEventListener('touchstart', function(e) {
+    if (bboxMode || retryPreview || element._peRetryRequest) return;
     e.preventDefault();
     try { canvas.focus({preventScroll: true}); } catch (_) { canvas.focus(); }
     var touched = nearest(getPos(e));
@@ -1313,6 +2071,7 @@ function bootEditor() {
   }, { passive: false });
 
   canvas.addEventListener('touchmove', function(e) {
+    if (bboxMode || retryPreview || element._peRetryRequest) return;
     e.preventDefault();
     if (dragging === null) return;
     var p = getPos(e);
@@ -1335,12 +2094,26 @@ function bootEditor() {
   }, { passive: true });
 
   /* buttons — clone each to remove any previous listeners from old initialisations */
-  function rebind(sel, fn) {
+  function rebind(sel, fn, eventName) {
     var old = element.querySelector(sel);
     if (!old) return;
     var fresh = old.cloneNode(true);
     old.parentNode.replaceChild(fresh, old);
-    fresh.addEventListener('click', fn);
+    fresh.addEventListener(eventName || 'click', fn);
+  }
+
+  function syncVisibilityControls() {
+    var athleteBox = element.querySelector('[data-action="athlete-box"]');
+    if (athleteBox) athleteBox.checked = showAthleteBox;
+    var points = element.querySelector('[data-action="keypoints"]');
+    var labels = element.querySelector('[data-action="names"]');
+    var angles = element.querySelector('[data-action="angles"]');
+    if (points) points.checked = showKeypoints;
+    if (labels) {
+      labels.checked = showNames;
+      labels.disabled = !showKeypoints;
+    }
+    if (angles) angles.checked = showAngles;
   }
 
   /* Expose getter so the Apply-Changes button JS can read fresh keypoints directly */
@@ -1354,9 +2127,130 @@ function bootEditor() {
       return element._peCurrentPayload || raw;
     };
     peWrap._peLoadPayload = loadFramePayload;
+    peWrap._peRetryComplete = function(rawResult) {
+      var result;
+      try { result = JSON.parse(rawResult); } catch(e) { return; }
+      if (result.request !== element._peRetryRequest) return;
+      element._peRetryRequest = null;
+      var target = JSON.parse(result.request);
+      if (result.payload && target.original_image === DATA.original_image &&
+          target.frame_index === requestedFrameIndex) {
+        if (result.stage === 'preview') {
+          clearBboxSelection();
+          retryPreview = {token: result.token, kps: JSON.parse(atob(result.payload)).kps};
+          showKeypoints = true;
+          if (info) info.textContent = 'Yeni poz önizlemesi — onaylanana kadar mevcut kayıt korunur.';
+          render();
+        } else loadFramePayload(result.payload);
+      }
+      if (result.stage === 'discarded') { retryPreview = null; render(); }
+      updateFrameControls();
+    };
   }
 
+  function beginBboxSelection() {
+    if (element._peRetryRequest || requestedFrameIndex !== frameIndex ||
+        editorRole !== 'video' || retryPreview) return;
+    setPlaybackActive(false);
+    customAngleMode = false;
+    deleteAngleMode = false;
+    bboxMode = true;
+    bboxPurpose = 'athlete';
+    selectedPoints = [];
+    bboxStart = null;
+    selectedBbox = null;
+    canvas.style.touchAction = 'none';
+    canvas.style.cursor = 'crosshair';
+    if (info) info.textContent = 'Atletin tüm vücudunu kapsayan bir kutu çizin, ardından tahmini başlatın.';
+    updateFrameControls();
+    render();
+    canvas.focus({preventScroll: true});
+  }
+
+  var bboxHelpPreference = 'pose-editor.hide-bbox-help.v1';
+  rebind('[data-action="retry-frame"]', function() {
+    if (element._peRetryRequest || requestedFrameIndex !== frameIndex ||
+        editorRole !== 'video' || retryPreview) return;
+    setPlaybackActive(false);
+    var skipHelp = !!element._peSkipBboxHelp;
+    try { skipHelp = skipHelp || window.localStorage.getItem(bboxHelpPreference) === '1'; } catch (_) {}
+    if (skipHelp) { beginBboxSelection(); return; }
+    var helpDialog = element.querySelector('.pe-bbox-help');
+    var checkbox = element.querySelector('.pe-bbox-help-skip');
+    if (checkbox) checkbox.checked = false;
+    if (helpDialog && !helpDialog.open) helpDialog.showModal();
+  });
+
+  rebind('[data-action="bbox-help-start"]', function() {
+    var checkbox = element.querySelector('.pe-bbox-help-skip');
+    if (checkbox && checkbox.checked) {
+      element._peSkipBboxHelp = true;
+      try { window.localStorage.setItem(bboxHelpPreference, '1'); } catch (_) {}
+    }
+    var helpDialog = element.querySelector('.pe-bbox-help');
+    if (helpDialog && helpDialog.open) helpDialog.close();
+    beginBboxSelection();
+  });
+
+  rebind('[data-action="bbox-help-cancel"]', function() {
+    var helpDialog = element.querySelector('.pe-bbox-help');
+    if (helpDialog && helpDialog.open) helpDialog.close();
+  });
+
+  rebind('[data-action="cancel-box"]', function() {
+    if (element._peRetryRequest) return;
+    clearBboxSelection(); updateFrameControls(); render();
+    if (info) info.textContent = 'Atlet seçimi iptal edildi.';
+  });
+
+  function deleteSelectedPoints() {
+    if (!selectedPoints.length || retryPreview || element._peRetryRequest) return;
+    var before = snapshotKeypoints();
+    var count = selectedPoints.length;
+    selectedPoints.forEach(function(index) { keypoints[index].c = 0; });
+    recordKeypointChange(before);
+    clearBboxSelection();
+    render(); emitKeypointsToHiddenOutput(); updateFrameControls();
+    if (info) info.textContent = count + ' nokta silindi. Geri Al ile kurtarabilir, JSON’a Kaydet ile kalıcılaştırabilirsiniz.';
+  }
+  rebind('[data-action="delete-points"]', deleteSelectedPoints);
+  rebind('[data-action="select-points"]', function() {
+    if (retryPreview || element._peRetryRequest) return;
+    setPlaybackActive(false); clearBboxSelection();
+    bboxMode = true; bboxPurpose = 'points'; showKeypoints = true;
+    customAngleMode = false; deleteAngleMode = false;
+    canvas.style.touchAction = 'none'; canvas.style.cursor = 'crosshair';
+    if (info) info.textContent = 'Silinecek noktaları kutuyla seçin. Delete ile silin; Esc ile seçimi iptal edin.';
+    updateFrameControls(); render(); canvas.focus({preventScroll: true});
+  });
+  function finishPosePreview(action) {
+    if (!retryPreview || element._peRetryRequest || requestedFrameIndex !== frameIndex) return;
+    element._peRetryRequest = JSON.stringify({action: action, token: retryPreview.token,
+      frame_index: frameIndex, original_image: DATA.original_image, nonce: Date.now()});
+    if (!setHiddenTextValue('pose_retry_frame_trigger', element._peRetryRequest)) element._peRetryRequest = null;
+    updateFrameControls();
+  }
+  rebind('[data-action="accept-pose"]', function() { finishPosePreview('accept'); });
+  rebind('[data-action="discard-pose"]', function() { finishPosePreview('discard'); });
+
+  rebind('[data-action="retry-box"]', function() {
+    if (!bboxMode || !selectedBbox || bboxStart || element._peRetryRequest || requestedFrameIndex !== frameIndex) return;
+    element._peRetryRequest = JSON.stringify({
+      frame_index: frameIndex,
+      original_image: DATA.original_image,
+      bbox: selectedBbox.map(function(value) { return value / csScale; }),
+      nonce: Date.now()
+    });
+    if (!setHiddenTextValue('pose_retry_frame_trigger', element._peRetryRequest)) {
+      element._peRetryRequest = null;
+      if (info) info.textContent = 'Tekrar tahminleme başlatılamadı.';
+    }
+    updateFrameControls();
+  });
+
   rebind('[data-action="reset"]', function() {
+    clearBboxSelection();
+    updateFrameControls();
     var beforeReset = snapshotKeypoints();
     keypoints = JSON.parse(JSON.stringify(origKps));
     recordKeypointChange(beforeReset);
@@ -1372,10 +2266,16 @@ function bootEditor() {
     if (info) info.textContent = 'Orijinal konumlar ve zoom sifirlandi.';
   });
 
-  rebind('[data-action="names"]', function() {
-    showNames = !showNames;
+  rebind('[data-action="athlete-box"]', function(event) {
+    showAthleteBox = event.target.checked;
+    element._peShowAthleteBox = showAthleteBox;
     render();
-  });
+  }, 'change');
+
+  rebind('[data-action="names"]', function(event) {
+    showNames = event.target.checked;
+    render();
+  }, 'change');
 
   rebind('[data-action="save"]', function() {
     var a = document.createElement('a');
@@ -1385,11 +2285,10 @@ function bootEditor() {
     if (info) info.textContent = 'PNG kaydedildi.';
   });
 
-  rebind('[data-action="angles"]', function() {
-    showAngles = !showAngles;
+  rebind('[data-action="angles"]', function(event) {
+    showAngles = event.target.checked;
     render();
-    if (info) info.textContent = showAngles ? 'Acilar gosteriliyor.' : 'Acilar gizlendi.';
-  });
+  }, 'change');
 
   rebind('[data-action="custom-angle"]', function() {
     setCustomAngleMode(!customAngleMode);
@@ -1399,27 +2298,29 @@ function bootEditor() {
     setDeleteAngleMode(!deleteAngleMode);
   });
 
-  rebind('[data-action="fullscreen"]', function() {
-    var wrap = element.querySelector('.pe-wrap');
-    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-      if (wrap.requestFullscreen) { wrap.requestFullscreen(); }
-      else if (wrap.webkitRequestFullscreen) { wrap.webkitRequestFullscreen(); }
-    } else {
-      if (document.exitFullscreen) { document.exitFullscreen(); }
-      else if (document.webkitExitFullscreen) { document.webkitExitFullscreen(); }
-    }
-  });
-
-  rebind('[data-action="keypoints"]', function() {
-    showKeypoints = !showKeypoints;
+  rebind('[data-action="keypoints"]', function(event) {
+    showKeypoints = event.target.checked;
+    if (!showKeypoints && customAngleMode) setCustomAngleMode(false);
     render();
-    if (info) info.textContent = showKeypoints ? 'Noktalar gosteriliyor.' : 'Noktalar gizlendi.';
-  });
+  }, 'change');
 
   rebind('[data-action="undo"]', undoKeypointMove);
   rebind('[data-action="redo"]', redoKeypointMove);
 
+  rebind('[data-action="play"]', function() {
+    if (element._pePlaybackActive) {
+      setPlaybackActive(false);
+      return;
+    }
+    setPlaybackActive(true);
+    if (frameIndex >= frameCount - 1) emitFrameTrigger(0);
+    else schedulePlaybackNext();
+  });
+
   var historyKeyHandler = function(e) {
+    var typing = e.target && (e.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName));
+    if (typing || retryPreview || element._peRetryRequest) return;
+    if (e.key === 'Delete' && selectedPoints.length) { e.preventDefault(); deleteSelectedPoints(); return; }
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
     var target = e.target;
     if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
@@ -1799,6 +2700,9 @@ def prepare_editor_from_path(
         "manual_angles": data.get("manual_angles", []),
         "deleted_standard_angles": data.get("deleted_standard_angles", []),
         "editor_role": editor_role,
+        "has_detected_pose": has_detected_pose,
+        "tracking": data.get("tracking"),
+        "original_image": str(img_path),
         "output_id": output_id,
         "prev_trigger_id": prev_trigger_id,
         "next_trigger_id": next_trigger_id,
@@ -2331,6 +3235,8 @@ def _build_editor_payload_from_canvas_kps(
     payload = json.dumps({
       "img": f"data:image/jpeg;base64,{_img_to_b64(disp)}",
       "kps": payload_kps,
+      "original_image": str(img_path),
+      "has_detected_pose": any(kp["c"] >= 0.1 for kp in payload_kps),
       "sk": joints_dict()["coco_25"]["skeleton"],
       "nm": kp_names,
       "cs": cs,
