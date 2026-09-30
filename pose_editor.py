@@ -51,6 +51,7 @@ EDITOR_HTML_TEMPLATE = """
     <button class="pe-btn pe-names"  data-action="names">&#128065; Names</button>
     <button class="pe-btn pe-save"   data-action="save">&#128190; Save PNG</button>
     <button class="pe-btn pe-angles" data-action="angles">&#128208; A&#231;&#305;lar</button>
+    <button class="pe-btn pe-angle-select" data-action="angle-select">&#128204; A&#231;&#305; Se&#231;</button>
     <button class="pe-btn pe-custom-angle" data-action="custom-angle">&#8736; &#214;zel A&#231;&#305;</button>
     <button class="pe-btn pe-delete-angle" data-action="delete-angle">&#9003; A&#231;&#305; Sil</button>
     <button class="pe-btn pe-fullscreen" data-action="fullscreen">&#x2922; Tam Ekran</button>
@@ -61,6 +62,7 @@ EDITOR_HTML_TEMPLATE = """
       <button class="pe-btn pe-next" data-action="next">Next &#9654;</button>
     </div>
   </div>
+  <div class="pe-angle-picker" style="display:none"></div>
 </div>
 """
 
@@ -83,6 +85,8 @@ EDITOR_CSS_TEMPLATE = """
 .pe-names  { background: #2980b9; }
 .pe-save   { background: #8e44ad; }
 .pe-angles { background: #27ae60; }
+.pe-angle-select { background: #2f80ed; }
+.pe-angle-select.is-active { outline: 2px solid #fff; box-shadow: 0 0 0 2px rgba(47,128,237,.45); }
 .pe-custom-angle { background: #16a085; }
 .pe-custom-angle.is-active { outline: 2px solid #fff; box-shadow: 0 0 0 2px rgba(22,160,133,.45); }
 .pe-delete-angle { background: #b83280; }
@@ -93,6 +97,36 @@ EDITOR_CSS_TEMPLATE = """
 .pe-nav-group { margin-left: auto; display: flex; gap: 6px; }
 .pe-prev   { background: #555e6e; }
 .pe-next   { background: #555e6e; }
+.pe-angle-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 6px;
+  background: rgba(255,255,255,.06);
+}
+.pe-angle-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pe-angle-group-title {
+  color: #d8dee9;
+  font: 700 12px sans-serif;
+  min-width: 86px;
+}
+.pe-angle-choice {
+  border: 1px solid rgba(255,255,255,.22);
+  background: rgba(255,255,255,.10);
+  color: #fff;
+  border-radius: 5px;
+  padding: 5px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pe-angle-choice.is-selected {
+  background: #ffb000;
+  border-color: #ffd166;
+  color: #1e1e2e;
+  font-weight: 700;
+}
 
 .pe-wrap:fullscreen { 
   padding: 15px; 
@@ -164,6 +198,7 @@ function bootEditor() {
 
   var ctx  = canvas.getContext('2d');
   var info = element.querySelector('.pe-info');
+  var anglePicker = element.querySelector('.pe-angle-picker');
 
   var R = 7;
   var origKps   = JSON.parse(JSON.stringify(DATA.kps));
@@ -193,7 +228,59 @@ function bootEditor() {
   });
   var showNames  = true;
   var showAngles = false;
+  var showSelectedAngles = Boolean(DATA.show_selected_angles);
+  var selectedAngleKeys = {};
+  (DATA.selected_angle_keys || []).forEach(function(key) {
+    selectedAngleKeys[String(key)] = true;
+  });
   var showKeypoints = true;
+
+  var STANDARD_ANGLE_DEFS = [
+    [9,  7,  13, 'R.Omuz'],
+    [8,  6,  12, 'L.Omuz'],
+    [7,  9,  11, 'R.Dirsek'],
+    [6,  8,  10, 'L.Dirsek'],
+    [7,  13, 16, 'R.Kalca'],
+    [6,  12, 15, 'L.Kalca'],
+    [13, 16, 18, 'R.Diz'],
+    [12, 15, 17, 'L.Diz'],
+    [16, 18, 22, 'R.AyakBilegi'],
+    [15, 17, 19, 'L.AyakBilegi'],
+    [24, 18, 22, 'R.AyakYonu'],
+    [21, 17, 19, 'L.AyakYonu']
+  ];
+
+  var DERIVED_ANGLE_LABELS = [
+    'GovdeSapma',
+    'R.KolSapma',
+    'L.KolSapma',
+    'R.BacakSapma',
+    'L.BacakSapma',
+    'R.KolGeriGidis',
+    'L.KolGeriGidis',
+    'R.KalcaFleksExt',
+    'L.KalcaFleksExt',
+    'R.DizEkst',
+    'L.DizEkst'
+  ];
+
+  function angleKey(source, label) {
+    return source + ':' + label;
+  }
+
+  function selectedAngleCount() {
+    return Object.keys(selectedAngleKeys).length;
+  }
+
+  function angleDisplayActive() {
+    return showAngles || (showSelectedAngles && selectedAngleCount() > 0);
+  }
+
+  function shouldDrawAngle(source, label) {
+    if (showAngles) return true;
+    if (!showSelectedAngles) return false;
+    return Boolean(selectedAngleKeys[angleKey(source, label)]);
+  }
 
   /* ── zoom / pan state ── */
   var zoom      = 1.0, panX = 0, panY = 0;
@@ -238,6 +325,8 @@ function bootEditor() {
       orig_keypoints: origKps,
       canvas_scale: csScale,
       show_standard_angles: showAngles,
+      show_selected_angles: showSelectedAngles,
+      selected_angle_keys: Object.keys(selectedAngleKeys),
       deleted_standard_angles: Object.keys(deletedStandardAngles),
       manual_angles: customAngles.map(function(a) {
         return { keypoint_indices: [a[0], a[1], a[2]] };
@@ -365,7 +454,7 @@ function bootEditor() {
     return Math.round(deg);
   }
 
-  function pushMetric(metrics, label, angle, x, y, points, vertex) {
+  function pushMetric(metrics, label, angle, x, y, points, vertex, geometry) {
     if (angle === null || !Number.isFinite(angle)) return;
     metrics.push({
       label: label,
@@ -373,7 +462,8 @@ function bootEditor() {
       x: x,
       y: y,
       points: points,
-      vertex: vertex || 'Referans eksen'
+      vertex: vertex || 'Referans eksen',
+      geometry: geometry || null
     });
   }
 
@@ -392,7 +482,14 @@ function bootEditor() {
         (sx + hx) / 2,
         (sy + hy) / 2,
         ['shoulder_center', 'hip_center'],
-        'Dikey eksen'
+        'Dikey eksen',
+        {
+          kind: 'axis',
+          origin: { x: hx, y: hy },
+          target: { x: sx, y: sy },
+          axisX: 0,
+          axisY: -1
+        }
       );
     }
 
@@ -416,7 +513,14 @@ function bootEditor() {
           nameForKeypoint(startIdx) + ' [' + startIdx + ']',
           nameForKeypoint(endIdx) + ' [' + endIdx + ']'
         ],
-        axisName
+        axisName,
+        {
+          kind: 'axis',
+          origin: { x: start.x, y: start.y },
+          target: { x: end.x, y: end.y },
+          axisX: axisX,
+          axisY: axisY
+        }
       );
     }
 
@@ -446,7 +550,13 @@ function bootEditor() {
           nameForKeypoint(shoulderIdx) + ' [' + shoulderIdx + ']',
           nameForKeypoint(endIdx) + ' [' + endIdx + ']'
         ],
-        'Govde referansi'
+        'Govde referansi',
+        {
+          kind: 'directed',
+          origin: { x: shoulder.x, y: shoulder.y },
+          reference: { x: hip.x, y: hip.y },
+          target: { x: end.x, y: end.y }
+        }
       );
     }
 
@@ -470,7 +580,13 @@ function bootEditor() {
           nameForKeypoint(ib) + ' [' + ib + ']',
           nameForKeypoint(ic) + ' [' + ic + ']'
         ],
-        nameForKeypoint(ib) + ' [' + ib + ']'
+        nameForKeypoint(ib) + ' [' + ib + ']',
+        {
+          kind: 'joint',
+          ia: ia,
+          ib: ib,
+          ic: ic
+        }
       );
     }
 
@@ -483,12 +599,14 @@ function bootEditor() {
   }
 
   function drawDerivedMetrics() {
-    if (!showAngles) return;
+    if (!angleDisplayActive()) return;
     var metrics = derivedMetrics();
     ctx.save();
     ctx.font = 'bold ' + (11 / zoom) + 'px sans-serif';
     for (var i = 0; i < metrics.length; i++) {
       var m = metrics[i];
+      if (!shouldDrawAngle('derived', m.label)) continue;
+      drawDerivedMetricGeometry(m);
       var text = m.label + ': ' + m.angle + '\u00b0';
       var tx = m.x + 8 / zoom;
       var ty = m.y - 8 / zoom;
@@ -513,27 +631,131 @@ function bootEditor() {
     ctx.restore();
   }
 
+  function drawDerivedMetricGeometry(metric) {
+    if (!metric || !metric.geometry) return;
+    var g = metric.geometry;
+    if (g.kind === 'joint') {
+      drawDerivedJointGeometry(g.ia, g.ib, g.ic);
+    } else if (g.kind === 'axis') {
+      drawDerivedAxisGeometry(g.origin, g.target, g.axisX, g.axisY);
+    } else if (g.kind === 'directed') {
+      drawDerivedDirectedGeometry(g.origin, g.reference, g.target, metric.angle);
+    }
+  }
+
+  function drawDerivedJointGeometry(ia, ib, ic) {
+    if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) return;
+    var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
+    if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) return;
+    var dA = Math.sqrt((ka.x-kb.x)*(ka.x-kb.x) + (ka.y-kb.y)*(ka.y-kb.y));
+    var dC = Math.sqrt((kc.x-kb.x)*(kc.x-kb.x) + (kc.y-kb.y)*(kc.y-kb.y));
+    if (dA < 1 || dC < 1) return;
+    var arcR = Math.max(12 / zoom, Math.min(30 / zoom, Math.min(dA, dC) * 0.35));
+    var angA = Math.atan2(ka.y - kb.y, ka.x - kb.x);
+    var angC = Math.atan2(kc.y - kb.y, kc.x - kb.x);
+    var diff = angC - angA;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(kb.x, kb.y, arcR, angA, angC, diff < 0);
+    ctx.strokeStyle = 'rgba(255,176,0,0.96)';
+    ctx.lineWidth = 2.5 / zoom;
+    ctx.stroke();
+
+    ctx.setLineDash([4 / zoom, 3 / zoom]);
+    ctx.beginPath();
+    ctx.moveTo(kb.x, kb.y);
+    ctx.lineTo(kb.x + arcR * Math.cos(angA), kb.y + arcR * Math.sin(angA));
+    ctx.moveTo(kb.x, kb.y);
+    ctx.lineTo(kb.x + arcR * Math.cos(angC), kb.y + arcR * Math.sin(angC));
+    ctx.strokeStyle = 'rgba(255,176,0,0.65)';
+    ctx.lineWidth = 1.5 / zoom;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function drawDerivedAxisGeometry(origin, target, axisX, axisY) {
+    if (!origin || !target) return;
+    var vx = target.x - origin.x;
+    var vy = target.y - origin.y;
+    var len = Math.sqrt(vx * vx + vy * vy);
+    var axisLen = Math.sqrt(axisX * axisX + axisY * axisY);
+    if (len < 1 || axisLen < 1) return;
+    var ax = axisX / axisLen;
+    var ay = axisY / axisLen;
+    if ((vx * ax + vy * ay) < 0) {
+      ax = -ax;
+      ay = -ay;
+    }
+    var refLen = Math.max(26 / zoom, Math.min(58 / zoom, len * 0.55));
+    var ref = { x: origin.x + ax * refLen, y: origin.y + ay * refLen };
+
+    drawDerivedSegment(origin, target, 'rgba(255,176,0,0.92)', false);
+    drawDerivedSegment(origin, ref, 'rgba(255,176,0,0.62)', true);
+    drawDerivedArc(origin, ref, target, Math.min(refLen, len) * 0.55, false);
+  }
+
+  function drawDerivedDirectedGeometry(origin, reference, target, angle) {
+    if (!origin || !reference || !target) return;
+    var dR = Math.sqrt((reference.x-origin.x)*(reference.x-origin.x) + (reference.y-origin.y)*(reference.y-origin.y));
+    var dT = Math.sqrt((target.x-origin.x)*(target.x-origin.x) + (target.y-origin.y)*(target.y-origin.y));
+    if (dR < 1 || dT < 1) return;
+    drawDerivedSegment(origin, reference, 'rgba(255,176,0,0.58)', true);
+    drawDerivedSegment(origin, target, 'rgba(255,176,0,0.96)', false);
+    drawDerivedArc(origin, reference, target, Math.min(dR, dT) * 0.35, angle > 180);
+  }
+
+  function drawDerivedSegment(a, b, color, dashed) {
+    ctx.setLineDash(dashed ? [5 / zoom, 4 / zoom] : []);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = (dashed ? 1.6 : 2.6) / zoom;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function drawDerivedArc(origin, refPoint, targetPoint, radius, clockwiseLong) {
+    var arcR = Math.max(12 / zoom, Math.min(34 / zoom, radius || 24 / zoom));
+    var angA = Math.atan2(refPoint.y - origin.y, refPoint.x - origin.x);
+    var angB = Math.atan2(targetPoint.y - origin.y, targetPoint.x - origin.x);
+    var diff = angB - angA;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+    var anticlockwise = diff < 0;
+    if (clockwiseLong) anticlockwise = true;
+
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(origin.x, origin.y, arcR, angA, angB, anticlockwise);
+    ctx.strokeStyle = 'rgba(255,176,0,0.96)';
+    ctx.lineWidth = 2.4 / zoom;
+    ctx.stroke();
+
+    ctx.setLineDash([4 / zoom, 3 / zoom]);
+    ctx.beginPath();
+    ctx.moveTo(origin.x, origin.y);
+    ctx.lineTo(origin.x + arcR * Math.cos(angA), origin.y + arcR * Math.sin(angA));
+    ctx.moveTo(origin.x, origin.y);
+    ctx.lineTo(origin.x + arcR * Math.cos(angB), origin.y + arcR * Math.sin(angB));
+    ctx.strokeStyle = 'rgba(255,176,0,0.55)';
+    ctx.lineWidth = 1.4 / zoom;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   function drawAngles() {
-    if (!showAngles) return;
+    if (!angleDisplayActive()) return;
     /* [idxA, idxB(vertex), idxC, label]  — standard COCO-25 indices */
-    var ANG = [
-      [9,  7,  13, 'R.Omuz'],
-      [8,  6,  12, 'L.Omuz'],
-      [7,  9,  11, 'R.Dirsek'],
-      [6,  8,  10, 'L.Dirsek'],
-      [7,  13, 16, 'R.Kalca'],
-      [6,  12, 15, 'L.Kalca'],
-      [13, 16, 18, 'R.Diz'],
-      [12, 15, 17, 'L.Diz'],
-      [16, 18, 22, 'R.AyakBilegi'],
-      [15, 17, 19, 'L.AyakBilegi'],
-      [24, 18, 22, 'R.AyakYonu'],
-      [21, 17, 19, 'L.AyakYonu']
-    ];
+    var ANG = STANDARD_ANGLE_DEFS;
     ctx.save();
     for (var ai = 0; ai < ANG.length; ai++) {
       var ia = ANG[ai][0], ib = ANG[ai][1], ic = ANG[ai][2];
       if (deletedStandardAngles[ANG[ai][3]]) continue;
+      if (!shouldDrawAngle('standard', ANG[ai][3])) continue;
       if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) continue;
       var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
       if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) continue;
@@ -718,7 +940,7 @@ function bootEditor() {
   }
 
   function findHoveredAngle(p) {
-    if (!showAngles && !customAngles.length) return null;
+    if (!angleDisplayActive() && !customAngles.length) return null;
     for (var i = angleHitboxes.length - 1; i >= 0; i--) {
       var h = angleHitboxes[i];
       var dx = p.x - h.x, dy = p.y - h.y;
@@ -829,8 +1051,76 @@ function bootEditor() {
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
+  function angleChoiceButton(source, label) {
+    var key = angleKey(source, label);
+    var selected = selectedAngleKeys[key] ? ' is-selected' : '';
+    return '<button type="button" class="pe-angle-choice' + selected + '" data-angle-key="' +
+      key + '">' + label + '</button>';
+  }
+
+  function renderAnglePicker() {
+    if (!anglePicker) return;
+    anglePicker.style.display = showSelectedAngles ? 'flex' : 'none';
+    if (!showSelectedAngles) return;
+    var standardButtons = STANDARD_ANGLE_DEFS.map(function(def) {
+      return angleChoiceButton('standard', def[3]);
+    }).join('');
+    var derivedButtons = DERIVED_ANGLE_LABELS.map(function(label) {
+      return angleChoiceButton('derived', label);
+    }).join('');
+    anglePicker.innerHTML =
+      '<div class="pe-angle-group"><span class="pe-angle-group-title">Standart</span>' +
+      standardButtons +
+      '</div><div class="pe-angle-group"><span class="pe-angle-group-title">Teknik</span>' +
+      derivedButtons +
+      '</div>';
+  }
+
+  function setAngleSelectMode(active) {
+    showSelectedAngles = active;
+    if (showSelectedAngles) {
+      showAngles = false;
+      customAngleMode = false;
+      deleteAngleMode = false;
+      customAnglePick = [];
+    }
+    var btn = element.querySelector('[data-action="angle-select"]');
+    if (btn) btn.classList.toggle('is-active', showSelectedAngles);
+    var customBtn = element.querySelector('[data-action="custom-angle"]');
+    if (customBtn) customBtn.classList.toggle('is-active', customAngleMode);
+    var deleteBtn = element.querySelector('[data-action="delete-angle"]');
+    if (deleteBtn) deleteBtn.classList.toggle('is-active', deleteAngleMode);
+    renderAnglePicker();
+    render();
+    emitKeypointsToHiddenOutput();
+    if (info) {
+      info.textContent = showSelectedAngles
+        ? 'Aci secimi acik: listeden acilari secin.'
+        : 'Aci secimi kapatildi.';
+    }
+  }
+
+  if (anglePicker) {
+    anglePicker.onclick = function(e) {
+      var btn = e.target && e.target.closest ? e.target.closest('.pe-angle-choice') : null;
+      if (!btn) return;
+      var key = btn.getAttribute('data-angle-key');
+      if (!key) return;
+      if (selectedAngleKeys[key]) delete selectedAngleKeys[key];
+      else selectedAngleKeys[key] = true;
+      showSelectedAngles = true;
+      showAngles = false;
+      renderAnglePicker();
+      render();
+      emitKeypointsToHiddenOutput();
+      if (info) info.textContent = selectedAngleCount() + ' aci secildi.';
+    };
+  }
+  renderAnglePicker();
+
   function setCustomAngleMode(active) {
     customAngleMode = active;
+    if (customAngleMode) setAngleSelectMode(false);
     if (customAngleMode) setDeleteAngleMode(false);
     customAnglePick = [];
     if (customAngleMode) showKeypoints = true;
@@ -851,11 +1141,15 @@ function bootEditor() {
       customAngleMode = false;
       customAnglePick = [];
       showAngles = true;
+      showSelectedAngles = false;
+      renderAnglePicker();
     }
     var deleteBtn = element.querySelector('[data-action="delete-angle"]');
     if (deleteBtn) deleteBtn.classList.toggle('is-active', deleteAngleMode);
     var customBtn = element.querySelector('[data-action="custom-angle"]');
     if (customBtn) customBtn.classList.toggle('is-active', customAngleMode);
+    var selectBtn = element.querySelector('[data-action="angle-select"]');
+    if (selectBtn) selectBtn.classList.toggle('is-active', showSelectedAngles);
     canvas.style.cursor = deleteAngleMode ? 'not-allowed' : (customAngleMode ? 'copy' : 'crosshair');
     render();
     if (info) {
@@ -1094,9 +1388,14 @@ function bootEditor() {
     customAnglePick = [];
     customAngles = [];
     deletedStandardAngles = {};
+    selectedAngleKeys = {};
+    showSelectedAngles = false;
     deleteAngleMode = false;
+    renderAnglePicker();
     var deleteBtn = element.querySelector('[data-action="delete-angle"]');
     if (deleteBtn) deleteBtn.classList.remove('is-active');
+    var selectBtn = element.querySelector('[data-action="angle-select"]');
+    if (selectBtn) selectBtn.classList.remove('is-active');
     render();
     emitKeypointsToHiddenOutput();
     if (info) info.textContent = 'Orijinal konumlar ve zoom sifirlandi.';
@@ -1117,9 +1416,19 @@ function bootEditor() {
 
   rebind('[data-action="angles"]', function() {
     showAngles = !showAngles;
+    if (showAngles) showSelectedAngles = false;
+    renderAnglePicker();
+    var selectBtn = element.querySelector('[data-action="angle-select"]');
+    if (selectBtn) selectBtn.classList.toggle('is-active', showSelectedAngles);
     render();
     if (info) info.textContent = showAngles ? 'Acilar gosteriliyor.' : 'Acilar gizlendi.';
   });
+
+  rebind('[data-action="angle-select"]', function() {
+    setAngleSelectMode(!showSelectedAngles);
+  });
+  var initialSelectBtn = element.querySelector('[data-action="angle-select"]');
+  if (initialSelectBtn) initialSelectBtn.classList.toggle('is-active', showSelectedAngles);
 
   rebind('[data-action="custom-angle"]', function() {
     setCustomAngleMode(!customAngleMode);
@@ -1842,6 +2151,17 @@ def _build_standard_angle_records(
     return records
 
 
+def _angle_record_key(record: Dict[str, Any]) -> str:
+    source = "derived" if record.get("source") == "derived_pose_metric" else "standard"
+    return f"{source}:{record.get('label', '')}"
+
+
+def _filter_angle_records_by_keys(records: list, selected_keys: set) -> list:
+    if not selected_keys:
+        return []
+    return [record for record in records if _angle_record_key(record) in selected_keys]
+
+
 def _safe_filename_part(value: str) -> str:
     keep = []
     for ch in value:
@@ -1866,6 +2186,8 @@ def _save_angles_sidecar_json(
     source_json_path: str,
     original_img_path: str,
     deleted_standard_angles: Optional[list] = None,
+    selected_angle_keys: Optional[list] = None,
+    show_selected_angles: bool = False,
 ) -> Optional[Path]:
     """Write manual angle records to easy_ViTPose/temp/açılar as a separate JSON file."""
     _ANGLE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1887,6 +2209,8 @@ def _save_angles_sidecar_json(
         "derived_metrics": derived_metric_records,
         "manual_angles": manual_angle_records,
         "deleted_standard_angles": deleted_standard_angles or [],
+        "selected_angle_keys": selected_angle_keys or [],
+        "show_selected_angles": show_selected_angles,
     }
     out_path.write_text(json.dumps(out_data, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_path
@@ -1898,6 +2222,8 @@ def _build_editor_payload_from_kps(
     idx_to_name: Optional[Dict[int, str]] = None,
     manual_angles: Optional[list] = None,
     deleted_standard_angles: Optional[list] = None,
+    selected_angle_keys: Optional[list] = None,
+    show_selected_angles: bool = False,
     editor_role: str = "main",
     output_id: str = "kp_editor_output",
     prev_trigger_id: str = "pe_prev_trigger",
@@ -1927,6 +2253,8 @@ def _build_editor_payload_from_kps(
         "cs": cs,
         "manual_angles": manual_angles or [],
         "deleted_standard_angles": deleted_standard_angles or [],
+        "selected_angle_keys": selected_angle_keys or [],
+        "show_selected_angles": show_selected_angles,
         "editor_role": editor_role,
         "output_id": output_id,
         "prev_trigger_id": prev_trigger_id,
@@ -1943,6 +2271,8 @@ def _build_editor_payload_from_canvas_kps(
     idx_to_name: Optional[Dict[int, str]] = None,
     manual_angles: Optional[list] = None,
     deleted_standard_angles: Optional[list] = None,
+    selected_angle_keys: Optional[list] = None,
+    show_selected_angles: bool = False,
     editor_role: str = "main",
     output_id: str = "kp_editor_output",
     prev_trigger_id: str = "pe_prev_trigger",
@@ -1981,6 +2311,8 @@ def _build_editor_payload_from_canvas_kps(
       "cs": cs,
       "manual_angles": manual_angles or [],
       "deleted_standard_angles": deleted_standard_angles or [],
+      "selected_angle_keys": selected_angle_keys or [],
+      "show_selected_angles": show_selected_angles,
       "editor_role": editor_role,
       "output_id": output_id,
       "prev_trigger_id": prev_trigger_id,
@@ -2031,6 +2363,13 @@ def apply_and_save_keypoints(
     prev_trigger_id = str(payload.get("prev_trigger_id") or "pe_prev_trigger")
     next_trigger_id = str(payload.get("next_trigger_id") or "pe_next_trigger")
     save_standard_angles = bool(payload.get("show_standard_angles", False))
+    selected_angle_keys = [
+      str(key) for key in payload.get("selected_angle_keys", [])
+      if str(key)
+    ]
+    selected_angle_key_set = set(selected_angle_keys)
+    save_selected_angles = bool(payload.get("show_selected_angles", False)) and bool(selected_angle_key_set)
+    save_system_angles = save_standard_angles or save_selected_angles
 
     # Convert canvas coords -> image coords (row, col, c)
     kps_for_json = [[0.0, 0.0, 0.0] for _ in range(25)]
@@ -2047,8 +2386,11 @@ def apply_and_save_keypoints(
     json_path = _extract_existing_json_path(json_path_str or "")
 
     manual_angle_records = _build_manual_angle_records(raw_manual_angles, kps_for_json, idx_to_name)
-    standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name, deleted_standard_angles) if save_standard_angles else []
-    derived_metric_records = _build_derived_metric_records(kps_for_json, idx_to_name) if save_standard_angles else []
+    standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name, deleted_standard_angles) if save_system_angles else []
+    derived_metric_records = _build_derived_metric_records(kps_for_json, idx_to_name) if save_system_angles else []
+    if save_selected_angles and not save_standard_angles:
+      standard_angle_records = _filter_angle_records_by_keys(standard_angle_records, selected_angle_key_set)
+      derived_metric_records = _filter_angle_records_by_keys(derived_metric_records, selected_angle_key_set)
 
     if json_path:
       try:
@@ -2057,8 +2399,11 @@ def apply_and_save_keypoints(
 
         idx_to_name = {int(k): v for k, v in orig_data.get("skeleton", {}).items()} or idx_to_name
         manual_angle_records = _build_manual_angle_records(raw_manual_angles, kps_for_json, idx_to_name)
-        standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name, deleted_standard_angles) if save_standard_angles else []
-        derived_metric_records = _build_derived_metric_records(kps_for_json, idx_to_name) if save_standard_angles else []
+        standard_angle_records = _build_standard_angle_records(kps_for_json, idx_to_name, deleted_standard_angles) if save_system_angles else []
+        derived_metric_records = _build_derived_metric_records(kps_for_json, idx_to_name) if save_system_angles else []
+        if save_selected_angles and not save_standard_angles:
+          standard_angle_records = _filter_angle_records_by_keys(standard_angle_records, selected_angle_key_set)
+          derived_metric_records = _filter_angle_records_by_keys(derived_metric_records, selected_angle_key_set)
 
         if not orig_data.get("keypoints") or not isinstance(orig_data["keypoints"], list):
           orig_data["keypoints"] = [{"0": kps_for_json}]
@@ -2075,17 +2420,37 @@ def apply_and_save_keypoints(
         orig_data["derived_metrics"] = derived_metric_records
         orig_data["manual_angles"] = manual_angle_records
         orig_data["deleted_standard_angles"] = deleted_standard_angles
+        orig_data["selected_angle_keys"] = selected_angle_keys
+        orig_data["show_selected_angles"] = save_selected_angles
         orig_data["manual_angle_schema"] = _manual_angle_schema()
 
         p.write_text(json.dumps(orig_data, ensure_ascii=False), encoding="utf-8")
-        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, derived_metric_records, str(p), original_img_path, deleted_standard_angles)
+        angles_path = _save_angles_sidecar_json(
+          manual_angle_records,
+          standard_angle_records,
+          derived_metric_records,
+          str(p),
+          original_img_path,
+          deleted_standard_angles,
+          selected_angle_keys,
+          save_selected_angles,
+        )
         total_angle_count = len(standard_angle_records) + len(derived_metric_records) + len(manual_angle_records)
         status = f"Kaydedildi: {p.name} | aci: {total_angle_count} | aci JSON: {angles_path}"
       except Exception as e:
         return current_payload, f"JSON kaydedilemedi: {e}"
     else:
       try:
-        angles_path = _save_angles_sidecar_json(manual_angle_records, standard_angle_records, derived_metric_records, "", original_img_path, deleted_standard_angles)
+        angles_path = _save_angles_sidecar_json(
+          manual_angle_records,
+          standard_angle_records,
+          derived_metric_records,
+          "",
+          original_img_path,
+          deleted_standard_angles,
+          selected_angle_keys,
+          save_selected_angles,
+        )
         total_angle_count = len(standard_angle_records) + len(derived_metric_records) + len(manual_angle_records)
         status = f"Goruntu guncellendi | aci: {total_angle_count} | aci JSON: {angles_path}"
       except Exception as e:
@@ -2098,6 +2463,8 @@ def apply_and_save_keypoints(
       idx_to_name=idx_to_name,
       manual_angles=manual_angle_records,
       deleted_standard_angles=deleted_standard_angles,
+      selected_angle_keys=selected_angle_keys,
+      show_selected_angles=save_selected_angles,
       editor_role=editor_role,
       output_id=output_id,
       prev_trigger_id=prev_trigger_id,

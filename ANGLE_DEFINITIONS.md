@@ -75,6 +75,8 @@ Uzman degerlendirmesinde gerekli gorulen bazi degerler klasik `A-B-C` eklem acis
 
 Bu metrikler ekranda `Acilar` modu acikken turuncu etiketlerle gosterilir. `Apply & Save` sonrasinda hem ana JSON icindeki `derived_metrics` alanina hem de ayri `_angles.json` dosyasina yazilir. Genel `angles` listesi artik `standard_angles + derived_metrics + manual_angles` siralamasiyla uretilir.
 
+`Aci Sec` modu acikken kullanici yalnizca secmek istedigi standart acilari ve teknik metrikleri listeden isaretleyebilir. Bu durumda `Apply & Save`, tum standart/turetilmis metrikler yerine secilen kayitlari yazar; eski `Acilar` modu ise tumunu kaydetmeye devam eder.
+
 ## Ozel Aci Modu
 
 Arayuzdeki `Ozel Aci` modu, standart tabloda olmayan acilar icin kullanilir. Kullanici uc keypoint secer:

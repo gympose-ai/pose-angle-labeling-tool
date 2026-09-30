@@ -297,6 +297,8 @@ Her eklem noktası değeri görüntü piksel koordinatlarında `[y, x, güven_sk
 
 Gövde sapması, kol/bacak sapması, kolların geriye gidişi, kalça fleksiyon/ekstansiyon ve diz ekstansiyon değerleri ayrıca `derived_metrics` alanına kaydedilir.
 
+Kalabalık görünümü azaltmak için **Açı Seç** düğmesi kullanılabilir. Bu modda listeden seçilen standart veya teknik metrikler görüntü üzerinde tek tek gösterilir; `Apply & Save` seçili mod açıkken yalnızca seçilen standart/teknik metrikleri JSON'a yazar. Eski **Açılar** düğmesi tüm açıları göstermeye ve kaydetmeye devam eder.
+
 Her kayıt açının hangi üç keypoint ile hesaplandığını, merkez eklemi, vektörleri ve derece değerini içerir:
 
 ```json
