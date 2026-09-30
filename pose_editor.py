@@ -1161,6 +1161,8 @@ function bootEditor() {
     var strokeScreen = clamp(radiusScreen * 0.22, 0.75, 1.5);
 
     return {
+      // Follow subject size while zooming out; cap at the original size when zoomed in.
+      angleUnitWorld: Math.min(poseSpan > 0 ? poseSpan / 400 : 1, 1 / zoom),
       radiusScreen: radiusScreen,
       radiusWorld: radiusScreen / zoom,
       hitRadiusWorld: (radiusScreen + strokeScreen / 2) / zoom,
@@ -1320,6 +1322,7 @@ function bootEditor() {
   }
 
   function derivedMetrics() {
+    var angleUnit = overlayMetrics().angleUnitWorld;
     var metrics = [];
     var shoulderCenter = bodyCenter(5, 6, 7);
     var hipCenter = bodyCenter(14, 12, 13);
@@ -1405,8 +1408,8 @@ function bootEditor() {
         metrics,
         label,
         ang,
-        kb.x + 16 / zoom,
-        kb.y + 16 / zoom,
+        kb.x + 16 * angleUnit,
+        kb.y + 16 * angleUnit,
         [
           nameForKeypoint(ia) + ' [' + ia + ']',
           nameForKeypoint(ib) + ' [' + ib + ']',
@@ -1425,16 +1428,17 @@ function bootEditor() {
   }
 
   function drawDerivedMetrics() {
+    var angleUnit = overlayMetrics().angleUnitWorld;
     if (!showAngles) return;
     var metrics = derivedMetrics();
     ctx.save();
-    ctx.font = 'bold ' + (11 / zoom) + 'px sans-serif';
+    ctx.font = 'bold ' + (11 * angleUnit) + 'px sans-serif';
     for (var i = 0; i < metrics.length; i++) {
       var m = metrics[i];
       var text = m.label + ': ' + m.angle + '\u00b0';
-      var tx = m.x + 8 / zoom;
-      var ty = m.y - 8 / zoom;
-      ctx.lineWidth = 3 / zoom;
+      var tx = m.x + 8 * angleUnit;
+      var ty = m.y - 8 * angleUnit;
+      ctx.lineWidth = 3 * angleUnit;
       ctx.strokeStyle = 'rgba(0,0,0,0.82)';
       ctx.strokeText(text, tx, ty);
       ctx.fillStyle = '#ffb000';
@@ -1442,7 +1446,7 @@ function bootEditor() {
       angleHitboxes.push({
         x: tx,
         y: ty,
-        r: Math.max(28 / zoom, ctx.measureText(text).width / 2),
+        r: Math.max(28 * angleUnit, ctx.measureText(text).width / 2),
         label: m.label,
         angle: m.angle,
         source: 'derived',
@@ -1456,6 +1460,7 @@ function bootEditor() {
   }
 
   function drawAngles() {
+    var angleUnit = overlayMetrics().angleUnitWorld;
     if (!showAngles) return;
     /* [idxA, idxB(vertex), idxC, label]  — standard COCO-25 indices */
     var ANG = [
@@ -1484,7 +1489,7 @@ function bootEditor() {
 
       var dA   = Math.sqrt((ka.x-kb.x)*(ka.x-kb.x) + (ka.y-kb.y)*(ka.y-kb.y));
       var dC   = Math.sqrt((kc.x-kb.x)*(kc.x-kb.x) + (kc.y-kb.y)*(kc.y-kb.y));
-      var arcR = Math.max(12 / zoom, Math.min(30 / zoom, Math.min(dA, dC) * 0.35));
+      var arcR = Math.min(30 * angleUnit, Math.min(dA, dC) * 0.35);
 
       var angA = Math.atan2(ka.y - kb.y, ka.x - kb.x);
       var angC = Math.atan2(kc.y - kb.y, kc.x - kb.x);
@@ -1497,18 +1502,18 @@ function bootEditor() {
       ctx.beginPath();
       ctx.arc(kb.x, kb.y, arcR, angA, angC, diff < 0);
       ctx.strokeStyle = 'rgba(255,50,50,0.95)';
-      ctx.lineWidth = 2 / zoom;
+      ctx.lineWidth = 2 * angleUnit;
       ctx.stroke();
 
       /* Dashed radii from vertex */
-      ctx.setLineDash([4 / zoom, 3 / zoom]);
+      ctx.setLineDash([4 * angleUnit, 3 * angleUnit]);
       ctx.beginPath();
       ctx.moveTo(kb.x, kb.y);
       ctx.lineTo(kb.x + arcR * Math.cos(angA), kb.y + arcR * Math.sin(angA));
       ctx.moveTo(kb.x, kb.y);
       ctx.lineTo(kb.x + arcR * Math.cos(angC), kb.y + arcR * Math.sin(angC));
       ctx.strokeStyle = 'rgba(255,50,50,0.6)';
-      ctx.lineWidth = 1.5 / zoom;
+      ctx.lineWidth = 1.5 * angleUnit;
       ctx.stroke();
       ctx.setLineDash([]);
 
@@ -1516,10 +1521,10 @@ function bootEditor() {
       var mvx = (ka.x - kb.x) / (dA || 1) + (kc.x - kb.x) / (dC || 1);
       var mvy = (ka.y - kb.y) / (dA || 1) + (kc.y - kb.y) / (dC || 1);
       var mv  = Math.sqrt(mvx * mvx + mvy * mvy) || 1;
-      var tx  = kb.x + (arcR + 18 / zoom) * mvx / mv;
-      var ty  = kb.y + (arcR + 18 / zoom) * mvy / mv;
-      ctx.font      = 'bold ' + (13 / zoom) + 'px sans-serif';
-      ctx.lineWidth = 3 / zoom;
+      var tx  = kb.x + (arcR + 18 * angleUnit) * mvx / mv;
+      var ty  = kb.y + (arcR + 18 * angleUnit) * mvy / mv;
+      ctx.font      = 'bold ' + (13 * angleUnit) + 'px sans-serif';
+      ctx.lineWidth = 3 * angleUnit;
       ctx.strokeStyle = 'rgba(0,0,0,0.85)';
       ctx.strokeText(ang + '\u00b0', tx, ty);
       ctx.fillStyle = '#FF3333';
@@ -1528,7 +1533,7 @@ function bootEditor() {
       angleHitboxes.push({
         x: tx,
         y: ty,
-        r: Math.max(24 / zoom, arcR + 14 / zoom),
+        r: Math.max(24 * angleUnit, arcR + 14 * angleUnit),
         label: ANG[ai][3],
         angle: ang,
         source: 'standard',
@@ -1556,6 +1561,7 @@ function bootEditor() {
   }
 
   function drawCustomAngle(ia, ib, ic, label, customIndex) {
+    var angleUnit = overlayMetrics().angleUnitWorld;
     if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) return;
     var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
     if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) return;
@@ -1564,7 +1570,7 @@ function bootEditor() {
 
     var dA   = Math.sqrt((ka.x-kb.x)*(ka.x-kb.x) + (ka.y-kb.y)*(ka.y-kb.y));
     var dC   = Math.sqrt((kc.x-kb.x)*(kc.x-kb.x) + (kc.y-kb.y)*(kc.y-kb.y));
-    var arcR = Math.max(12 / zoom, Math.min(30 / zoom, Math.min(dA, dC) * 0.35));
+    var arcR = Math.min(30 * angleUnit, Math.min(dA, dC) * 0.35);
 
     var angA = Math.atan2(ka.y - kb.y, ka.x - kb.x);
     var angC = Math.atan2(kc.y - kb.y, kc.x - kb.x);
@@ -1576,27 +1582,27 @@ function bootEditor() {
     ctx.beginPath();
     ctx.arc(kb.x, kb.y, arcR, angA, angC, diff < 0);
     ctx.strokeStyle = 'rgba(0,209,255,0.95)';
-    ctx.lineWidth = 2 / zoom;
+    ctx.lineWidth = 2 * angleUnit;
     ctx.stroke();
 
-    ctx.setLineDash([4 / zoom, 3 / zoom]);
+    ctx.setLineDash([4 * angleUnit, 3 * angleUnit]);
     ctx.beginPath();
     ctx.moveTo(kb.x, kb.y);
     ctx.lineTo(kb.x + arcR * Math.cos(angA), kb.y + arcR * Math.sin(angA));
     ctx.moveTo(kb.x, kb.y);
     ctx.lineTo(kb.x + arcR * Math.cos(angC), kb.y + arcR * Math.sin(angC));
     ctx.strokeStyle = 'rgba(0,209,255,0.55)';
-    ctx.lineWidth = 1.5 / zoom;
+    ctx.lineWidth = 1.5 * angleUnit;
     ctx.stroke();
     ctx.setLineDash([]);
 
     var mvx = (ka.x - kb.x) / (dA || 1) + (kc.x - kb.x) / (dC || 1);
     var mvy = (ka.y - kb.y) / (dA || 1) + (kc.y - kb.y) / (dC || 1);
     var mv  = Math.sqrt(mvx * mvx + mvy * mvy) || 1;
-    var tx  = kb.x + (arcR + 18 / zoom) * mvx / mv;
-    var ty  = kb.y + (arcR + 18 / zoom) * mvy / mv;
-    ctx.font      = 'bold ' + (13 / zoom) + 'px sans-serif';
-    ctx.lineWidth = 3 / zoom;
+    var tx  = kb.x + (arcR + 18 * angleUnit) * mvx / mv;
+    var ty  = kb.y + (arcR + 18 * angleUnit) * mvy / mv;
+    ctx.font      = 'bold ' + (13 * angleUnit) + 'px sans-serif';
+    ctx.lineWidth = 3 * angleUnit;
     ctx.strokeStyle = 'rgba(0,0,0,0.85)';
     ctx.strokeText(ang + '\u00b0', tx, ty);
     ctx.fillStyle = '#00d1ff';
@@ -1605,7 +1611,7 @@ function bootEditor() {
     angleHitboxes.push({
       x: tx,
       y: ty,
-      r: Math.max(24 / zoom, arcR + 14 / zoom),
+      r: Math.max(24 * angleUnit, arcR + 14 * angleUnit),
       label: label,
       angle: ang,
       source: 'manual',
