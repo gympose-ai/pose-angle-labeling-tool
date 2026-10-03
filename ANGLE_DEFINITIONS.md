@@ -72,6 +72,10 @@ Uzman degerlendirmesinde gerekli gorulen bazi degerler klasik `A-B-C` eklem acis
 | R.KolGeriGidis / L.KolGeriGidis | Omuz merkezli yonlu kol acisi. Referans `shoulder -> hip` govde hattidir; hedef `shoulder -> wrist` kol hattidir. Bilek yoksa dirsek kullanilir. Deger 0-360 derece araligindadir. | Govde referansi |
 | R.KalcaFleksExt / L.KalcaFleksExt | Mevcut kalca acisinin fleksiyon/ekstansiyon amacli etiketlenmis kopyasi. | Omuz-kalca-diz |
 | R.DizEkst / L.DizEkst | Mevcut diz acisinin ekstansiyon amacli etiketlenmis kopyasi. | Kalca-diz-ayak bilegi |
+| Iki bacak arasi aci | Sag ve sol bacak uclarinin kalca merkezinde olusturdugu aci. Ayak bilekleri tercih edilir; yoksa dizler kullanilir. | Kalca merkezi |
+| Pelvis acisi | Sag-sol kalca hattinin yatay eksenden sapmasi. | Yatay eksen |
+
+PDF/uzman mesajlarinda istenen `Bacak acisi`, `Govde acisi`, `Diz fleksiyon acisi`, `Iki bacak arasi aci`, `Govde-bacak acisi`, `Kollarin yatay acisi`, `Parabolik/ucus acisi`, `Kalca-govde eksantisyonu`, `Bacak yatay sapmasi`, `Pelvis acisi`, `Kollarin yanda acisi`, `Govde kalca fleksiyonu`, `Kalca ekstansiyonu`, `Kollarin geriye gidisi`, `Govde Sapmasi`, `Kol Sapmasi`, `Bacak Sapmasi` ve `Diz ekstansiyonu` adlari arayuzde ayrica listelenir. Bu adlar mevcut kisa teknik etiketleri silmeden ilgili 2D metriklere baglanir. `Parabolik/ucus acisi` tek karede gercek ucus parabolu yerine 2D tek-kare gostergesi olarak kaydedilir; fiziksel ucus acisi icin coklu frame takibi gerekir.
 
 Bu metrikler ekranda `Acilar` modu acikken turuncu etiketlerle gosterilir. `Apply & Save` sonrasinda hem ana JSON icindeki `derived_metrics` alanina hem de ayri `_angles.json` dosyasina yazilir. Genel `angles` listesi artik `standard_angles + derived_metrics + manual_angles` siralamasiyla uretilir.
 

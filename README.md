@@ -295,7 +295,7 @@ Her eklem noktası değeri görüntü piksel koordinatlarında `[y, x, güven_sk
 
 `Apply & Save` sırasında ekranda görünen açılar JSON'a yazılır. Standart **Açılar** görünümü açıksa kırmızı standart açılar `standard_angles` alanına, manuel seçilen özel açılar `manual_angles` alanına kaydedilir. Tüm kayıtlar birlikte `angles` alanında da tutulur.
 
-Gövde sapması, kol/bacak sapması, kolların geriye gidişi, kalça fleksiyon/ekstansiyon ve diz ekstansiyon değerleri ayrıca `derived_metrics` alanına kaydedilir.
+Gövde sapması, kol/bacak sapması, kolların geriye gidişi, kalça fleksiyon/ekstansiyon, diz ekstansiyon, iki bacak arası açı ve pelvis açısı değerleri ayrıca `derived_metrics` alanına kaydedilir. PDF/uzman mesajlarında istenen 18 teknik açı adı arayüzde ayrı butonlar olarak görünür; mevcut kısa teknik etiketler silinmeden korunur.
 
 Kalabalık görünümü azaltmak için **Açı Seç** düğmesi kullanılabilir. Bu modda listeden seçilen standart veya teknik metrikler görüntü üzerinde tek tek gösterilir; `Apply & Save` seçili mod açıkken yalnızca seçilen standart/teknik metrikleri JSON'a yazar. Eski **Açılar** düğmesi tüm açıları göstermeye ve kaydetmeye devam eder.
 

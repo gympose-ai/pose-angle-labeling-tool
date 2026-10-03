@@ -251,6 +251,24 @@ function bootEditor() {
   ];
 
   var DERIVED_ANGLE_LABELS = [
+    'Bacak açısı',
+    'Gövde açısı',
+    'Diz fleksiyon açısı',
+    'İki bacak arası açı',
+    'Gövde-bacak açısı',
+    'Kolların yatay açısı',
+    'Parabolik/uçuş açısı',
+    'Kalça-gövde eksantisyonu',
+    'Bacak yatay sapması',
+    'Pelvis açısı',
+    'Kolların yanda açısı',
+    'Gövde kalça fleksiyonu',
+    'Kalça ekstansiyonu',
+    'Kolların geriye gidişi',
+    'Gövde Sapması',
+    'Kol Sapması',
+    'Bacak Sapması',
+    'Diz ekstansiyonu',
     'GovdeSapma',
     'R.KolSapma',
     'L.KolSapma',
@@ -590,10 +608,108 @@ function bootEditor() {
       );
     }
 
+    function firstValidPoint(indices) {
+      for (var i = 0; i < indices.length; i++) {
+        var idx = indices[i];
+        if (idx >= keypoints.length) continue;
+        var kp = keypoints[idx];
+        if (validAngleKeypoint(kp)) return { point: kp, idx: idx };
+      }
+      return null;
+    }
+
+    function addSplitAngleMetric() {
+      var leftLeg = firstValidPoint([17, 15]);
+      var rightLeg = firstValidPoint([18, 16]);
+      if (!leftLeg || !rightLeg || !hipCenter) return;
+      var vertex = { x: hipCenter.point.x, y: hipCenter.point.y, c: 1 };
+      var ang = calcAngle(leftLeg.point, vertex, rightLeg.point);
+      pushMetric(
+        metrics,
+        'İki bacak arası açı',
+        ang,
+        vertex.x + 16 / zoom,
+        vertex.y + 16 / zoom,
+        [
+          nameForKeypoint(leftLeg.idx) + ' [' + leftLeg.idx + ']',
+          'hip_center',
+          nameForKeypoint(rightLeg.idx) + ' [' + rightLeg.idx + ']'
+        ],
+        'hip_center',
+        {
+          kind: 'jointPoints',
+          a: { x: leftLeg.point.x, y: leftLeg.point.y, c: leftLeg.point.c },
+          b: vertex,
+          c: { x: rightLeg.point.x, y: rightLeg.point.y, c: rightLeg.point.c }
+        }
+      );
+    }
+
+    function addPelvisAngleMetric() {
+      var leftHip = keypoints.length > 12 ? keypoints[12] : null;
+      var rightHip = keypoints.length > 13 ? keypoints[13] : null;
+      if (!validAngleKeypoint(leftHip) || !validAngleKeypoint(rightHip)) return;
+      pushMetric(
+        metrics,
+        'Pelvis açısı',
+        vectorAngleDeviation(rightHip.x - leftHip.x, rightHip.y - leftHip.y, 1, 0),
+        (leftHip.x + rightHip.x) / 2,
+        (leftHip.y + rightHip.y) / 2,
+        [
+          nameForKeypoint(12) + ' [12]',
+          nameForKeypoint(13) + ' [13]'
+        ],
+        'Yatay eksen',
+        {
+          kind: 'axis',
+          origin: { x: leftHip.x, y: leftHip.y },
+          target: { x: rightHip.x, y: rightHip.y },
+          axisX: 1,
+          axisY: 0
+        }
+      );
+    }
+
+    function cloneMetric(sourceLabel, newLabel, methodNote) {
+      for (var i = 0; i < metrics.length; i++) {
+        if (metrics[i].label !== sourceLabel) continue;
+        var base = metrics[i];
+        metrics.push({
+          label: newLabel,
+          angle: base.angle,
+          x: base.x,
+          y: base.y,
+          points: base.points ? base.points.slice() : [],
+          vertex: methodNote || base.vertex,
+          geometry: base.geometry
+        });
+        return;
+      }
+    }
+
     addAliasAngle('R.KalcaFleksExt', 7, 13, 16);
     addAliasAngle('L.KalcaFleksExt', 6, 12, 15);
     addAliasAngle('R.DizEkst', 13, 16, 18);
     addAliasAngle('L.DizEkst', 12, 15, 17);
+    addAliasAngle('Diz fleksiyon açısı', 13, 16, 18);
+    addAliasAngle('Kolların yanda açısı', 9, 7, 13);
+    addSplitAngleMetric();
+    addPelvisAngleMetric();
+
+    cloneMetric('R.BacakSapma', 'Bacak açısı');
+    cloneMetric('GovdeSapma', 'Gövde açısı');
+    cloneMetric('R.KalcaFleksExt', 'Gövde-bacak açısı');
+    cloneMetric('R.KolSapma', 'Kolların yatay açısı');
+    cloneMetric('GovdeSapma', 'Parabolik/uçuş açısı', 'Tek kare 2D uçuş göstergesi');
+    cloneMetric('R.KalcaFleksExt', 'Kalça-gövde eksantisyonu');
+    cloneMetric('R.BacakSapma', 'Bacak yatay sapması');
+    cloneMetric('R.KalcaFleksExt', 'Gövde kalça fleksiyonu');
+    cloneMetric('R.KalcaFleksExt', 'Kalça ekstansiyonu');
+    cloneMetric('R.KolGeriGidis', 'Kolların geriye gidişi');
+    cloneMetric('GovdeSapma', 'Gövde Sapması');
+    cloneMetric('R.KolSapma', 'Kol Sapması');
+    cloneMetric('R.BacakSapma', 'Bacak Sapması');
+    cloneMetric('R.DizEkst', 'Diz ekstansiyonu');
 
     return metrics;
   }
@@ -636,11 +752,44 @@ function bootEditor() {
     var g = metric.geometry;
     if (g.kind === 'joint') {
       drawDerivedJointGeometry(g.ia, g.ib, g.ic);
+    } else if (g.kind === 'jointPoints') {
+      drawDerivedJointPointGeometry(g.a, g.b, g.c);
     } else if (g.kind === 'axis') {
       drawDerivedAxisGeometry(g.origin, g.target, g.axisX, g.axisY);
     } else if (g.kind === 'directed') {
       drawDerivedDirectedGeometry(g.origin, g.reference, g.target, metric.angle);
     }
+  }
+
+  function drawDerivedJointPointGeometry(ka, kb, kc) {
+    if (!ka || !kb || !kc) return;
+    var dA = Math.sqrt((ka.x-kb.x)*(ka.x-kb.x) + (ka.y-kb.y)*(ka.y-kb.y));
+    var dC = Math.sqrt((kc.x-kb.x)*(kc.x-kb.x) + (kc.y-kb.y)*(kc.y-kb.y));
+    if (dA < 1 || dC < 1) return;
+    var arcR = Math.max(12 / zoom, Math.min(30 / zoom, Math.min(dA, dC) * 0.35));
+    var angA = Math.atan2(ka.y - kb.y, ka.x - kb.x);
+    var angC = Math.atan2(kc.y - kb.y, kc.x - kb.x);
+    var diff = angC - angA;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(kb.x, kb.y, arcR, angA, angC, diff < 0);
+    ctx.strokeStyle = 'rgba(255,176,0,0.96)';
+    ctx.lineWidth = 2.5 / zoom;
+    ctx.stroke();
+
+    ctx.setLineDash([4 / zoom, 3 / zoom]);
+    ctx.beginPath();
+    ctx.moveTo(kb.x, kb.y);
+    ctx.lineTo(kb.x + arcR * Math.cos(angA), kb.y + arcR * Math.sin(angA));
+    ctx.moveTo(kb.x, kb.y);
+    ctx.lineTo(kb.x + arcR * Math.cos(angC), kb.y + arcR * Math.sin(angC));
+    ctx.strokeStyle = 'rgba(255,176,0,0.65)';
+    ctx.lineWidth = 1.5 / zoom;
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   function drawDerivedJointGeometry(ia, ib, ic) {
@@ -1860,6 +2009,23 @@ def _directed_angle_degrees(refx: float, refy: float, vx: float, vy: float) -> O
     return round(angle, 3)
 
 
+def _calc_angle_degrees_between_xy(
+    a: Tuple[float, float],
+    b: Tuple[float, float],
+    c: Tuple[float, float],
+) -> Optional[float]:
+    bax = float(a[0]) - float(b[0])
+    bay = float(a[1]) - float(b[1])
+    bcx = float(c[0]) - float(b[0])
+    bcy = float(c[1]) - float(b[1])
+    ma = float(np.hypot(bax, bay))
+    mc = float(np.hypot(bcx, bcy))
+    if ma < 1 or mc < 1:
+        return None
+    cosang = max(-1.0, min(1.0, (bax * bcx + bay * bcy) / (ma * mc)))
+    return round(float(np.degrees(np.arccos(cosang))), 3)
+
+
 def _metric_names(indices: list, idx_to_name: Dict[int, str]) -> list:
     return [idx_to_name.get(i, str(i)) for i in indices]
 
@@ -1986,6 +2152,70 @@ def _add_joint_alias_metric(
         records.append(record)
 
 
+def _copy_metric_record(records: list, source_label: str, new_label: str, method_note: str = "") -> None:
+    for record in records:
+        if record.get("label") != source_label:
+            continue
+        cloned = dict(record)
+        cloned["label"] = new_label
+        if method_note:
+            cloned["method"] = f"{cloned.get('method', '')}; {method_note}".strip("; ")
+        records.append(cloned)
+        return
+
+
+def _first_valid_xy_from_rc(kps_rc: list, indices: list) -> Optional[Tuple[float, float, list]]:
+    for idx in indices:
+        point = _point_xy_from_rc(kps_rc, idx)
+        if point is not None:
+            return point
+    return None
+
+
+def _add_split_angle_metric(records: list, kps_rc: list, idx_to_name: Dict[int, str]) -> None:
+    left_leg = _first_valid_xy_from_rc(kps_rc, [17, 15])
+    right_leg = _first_valid_xy_from_rc(kps_rc, [18, 16])
+    hip_center = _body_center_xy_from_rc(kps_rc, 14, 12, 13)
+    if left_leg is None or right_leg is None or hip_center is None:
+        return
+    angle = _calc_angle_degrees_between_xy(
+        (left_leg[0], left_leg[1]),
+        (hip_center[0], hip_center[1]),
+        (right_leg[0], right_leg[1]),
+    )
+    record = _derived_metric_record(
+        "İki bacak arası açı",
+        angle,
+        left_leg[2] + hip_center[2] + right_leg[2],
+        idx_to_name,
+        "synthetic_joint_angle",
+        "hip_center",
+        "2D angle between left and right leg endpoints at the hip center; ankles are preferred and knees are used if ankles are unavailable",
+    )
+    if record:
+        record["vertex_name"] = "hip_center"
+        records.append(record)
+
+
+def _add_pelvis_angle_metric(records: list, kps_rc: list, idx_to_name: Dict[int, str]) -> None:
+    left_hip = _point_xy_from_rc(kps_rc, 12)
+    right_hip = _point_xy_from_rc(kps_rc, 13)
+    if left_hip is None or right_hip is None:
+        return
+    angle = _vector_axis_deviation_degrees(right_hip[0] - left_hip[0], right_hip[1] - left_hip[1], 1.0, 0.0)
+    record = _derived_metric_record(
+        "Pelvis açısı",
+        angle,
+        [12, 13],
+        idx_to_name,
+        "axis_deviation",
+        "horizontal_axis",
+        "2D pelvis-line deviation from the horizontal axis using left and right hip keypoints",
+    )
+    if record:
+        records.append(record)
+
+
 def _build_derived_metric_records(kps_rc: list, idx_to_name: Dict[int, str]) -> list:
     records = []
 
@@ -2022,6 +2252,25 @@ def _build_derived_metric_records(kps_rc: list, idx_to_name: Dict[int, str]) -> 
     _add_joint_alias_metric(records, kps_rc, idx_to_name, "L.KalcaFleksExt", 6, 12, 15, "left hip flexion/extension")
     _add_joint_alias_metric(records, kps_rc, idx_to_name, "R.DizEkst", 13, 16, 18, "right knee extension")
     _add_joint_alias_metric(records, kps_rc, idx_to_name, "L.DizEkst", 12, 15, 17, "left knee extension")
+    _add_joint_alias_metric(records, kps_rc, idx_to_name, "Diz fleksiyon açısı", 13, 16, 18, "right knee flexion")
+    _add_joint_alias_metric(records, kps_rc, idx_to_name, "Kolların yanda açısı", 9, 7, 13, "right arm-at-side shoulder angle")
+    _add_split_angle_metric(records, kps_rc, idx_to_name)
+    _add_pelvis_angle_metric(records, kps_rc, idx_to_name)
+
+    _copy_metric_record(records, "R.BacakSapma", "Bacak açısı")
+    _copy_metric_record(records, "GovdeSapma", "Gövde açısı")
+    _copy_metric_record(records, "R.KalcaFleksExt", "Gövde-bacak açısı")
+    _copy_metric_record(records, "R.KolSapma", "Kolların yatay açısı")
+    _copy_metric_record(records, "GovdeSapma", "Parabolik/uçuş açısı", "single-frame 2D proxy; real flight trajectory requires multiple frames")
+    _copy_metric_record(records, "R.KalcaFleksExt", "Kalça-gövde eksantisyonu")
+    _copy_metric_record(records, "R.BacakSapma", "Bacak yatay sapması")
+    _copy_metric_record(records, "R.KalcaFleksExt", "Gövde kalça fleksiyonu")
+    _copy_metric_record(records, "R.KalcaFleksExt", "Kalça ekstansiyonu")
+    _copy_metric_record(records, "R.KolGeriGidis", "Kolların geriye gidişi")
+    _copy_metric_record(records, "GovdeSapma", "Gövde Sapması")
+    _copy_metric_record(records, "R.KolSapma", "Kol Sapması")
+    _copy_metric_record(records, "R.BacakSapma", "Bacak Sapması")
+    _copy_metric_record(records, "R.DizEkst", "Diz ekstansiyonu")
 
     return records
 
