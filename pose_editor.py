@@ -670,46 +670,269 @@ function bootEditor() {
       );
     }
 
-    function cloneMetric(sourceLabel, newLabel, methodNote) {
-      for (var i = 0; i < metrics.length; i++) {
-        if (metrics[i].label !== sourceLabel) continue;
-        var base = metrics[i];
-        metrics.push({
-          label: newLabel,
-          angle: base.angle,
-          x: base.x,
-          y: base.y,
-          points: base.points ? base.points.slice() : [],
-          vertex: methodNote || base.vertex,
-          geometry: base.geometry
-        });
-        return;
-      }
-    }
-
     addAliasAngle('R.KalcaFleksExt', 7, 13, 16);
     addAliasAngle('L.KalcaFleksExt', 6, 12, 15);
     addAliasAngle('R.DizEkst', 13, 16, 18);
     addAliasAngle('L.DizEkst', 12, 15, 17);
-    addAliasAngle('Diz fleksiyon açısı', 13, 16, 18);
-    addAliasAngle('Kolların yanda açısı', 9, 7, 13);
     addSplitAngleMetric();
     addPelvisAngleMetric();
 
-    cloneMetric('R.BacakSapma', 'Bacak açısı');
-    cloneMetric('GovdeSapma', 'Gövde açısı');
-    cloneMetric('R.KalcaFleksExt', 'Gövde-bacak açısı');
-    cloneMetric('R.KolSapma', 'Kolların yatay açısı');
-    cloneMetric('GovdeSapma', 'Parabolik/uçuş açısı', 'Tek kare 2D uçuş göstergesi');
-    cloneMetric('R.KalcaFleksExt', 'Kalça-gövde eksantisyonu');
-    cloneMetric('R.BacakSapma', 'Bacak yatay sapması');
-    cloneMetric('R.KalcaFleksExt', 'Gövde kalça fleksiyonu');
-    cloneMetric('R.KalcaFleksExt', 'Kalça ekstansiyonu');
-    cloneMetric('R.KolGeriGidis', 'Kolların geriye gidişi');
-    cloneMetric('GovdeSapma', 'Gövde Sapması');
-    cloneMetric('R.KolSapma', 'Kol Sapması');
-    cloneMetric('R.BacakSapma', 'Bacak Sapması');
-    cloneMetric('R.DizEkst', 'Diz ekstansiyonu');
+    function averageNumbers(values) {
+      var clean = values.filter(function(v) { return v !== null && Number.isFinite(v); });
+      if (!clean.length) return null;
+      return Math.round(clean.reduce(function(sum, v) { return sum + v; }, 0) / clean.length);
+    }
+
+    function circularMeanDegrees(values) {
+      var clean = values.filter(function(v) { return v !== null && Number.isFinite(v); });
+      if (!clean.length) return null;
+      var sx = 0, sy = 0;
+      for (var i = 0; i < clean.length; i++) {
+        var rad = clean[i] * Math.PI / 180;
+        sx += Math.cos(rad);
+        sy += Math.sin(rad);
+      }
+      if (Math.sqrt(sx * sx + sy * sy) < 1e-6) return averageNumbers(clean);
+      var deg = Math.atan2(sy, sx) * 180 / Math.PI;
+      while (deg < 0) deg += 360;
+      while (deg >= 360) deg -= 360;
+      return Math.round(deg);
+    }
+
+    function itemLabelPoint(items) {
+      var xs = [], ys = [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i] && Number.isFinite(items[i].x) && Number.isFinite(items[i].y)) {
+          xs.push(items[i].x);
+          ys.push(items[i].y);
+        }
+      }
+      if (!xs.length) return null;
+      return {
+        x: xs.reduce(function(sum, v) { return sum + v; }, 0) / xs.length,
+        y: ys.reduce(function(sum, v) { return sum + v; }, 0) / ys.length
+      };
+    }
+
+    function addMetricFromItems(label, items, circular) {
+      var validItems = items.filter(function(item) {
+        return item && item.angle !== null && Number.isFinite(item.angle);
+      });
+      if (!validItems.length) return;
+      var angle = circular ? circularMeanDegrees(validItems.map(function(item) { return item.angle; }))
+                           : averageNumbers(validItems.map(function(item) { return item.angle; }));
+      var labelPoint = itemLabelPoint(validItems);
+      if (!labelPoint) return;
+      var points = [];
+      validItems.forEach(function(item) {
+        (item.points || []).forEach(function(point) {
+          if (points.indexOf(point) === -1) points.push(point);
+        });
+      });
+      pushMetric(
+        metrics,
+        label,
+        angle,
+        labelPoint.x,
+        labelPoint.y,
+        points,
+        validItems.map(function(item) { return item.vertex; }).join(' + '),
+        {
+          kind: 'multi',
+          items: validItems.map(function(item) { return item.geometry; }).filter(Boolean)
+        }
+      );
+    }
+
+    function segmentDeviationItem(startIdx, preferredEndIdx, fallbackEndIdx, axisName, axisX, axisY, transform) {
+      if (startIdx >= keypoints.length) return null;
+      var start = keypoints[startIdx];
+      var endIdx = preferredEndIdx;
+      var end = preferredEndIdx < keypoints.length ? keypoints[preferredEndIdx] : null;
+      if (!validAngleKeypoint(end) && fallbackEndIdx < keypoints.length) {
+        endIdx = fallbackEndIdx;
+        end = keypoints[fallbackEndIdx];
+      }
+      if (!validAngleKeypoint(start) || !validAngleKeypoint(end)) return null;
+      var raw = vectorAngleDeviation(end.x - start.x, end.y - start.y, axisX, axisY);
+      if (raw === null) return null;
+      return {
+        angle: transform ? transform(raw) : raw,
+        x: (start.x + end.x) / 2,
+        y: (start.y + end.y) / 2,
+        points: [
+          nameForKeypoint(startIdx) + ' [' + startIdx + ']',
+          nameForKeypoint(endIdx) + ' [' + endIdx + ']'
+        ],
+        vertex: axisName,
+        geometry: {
+          kind: 'axis',
+          origin: { x: start.x, y: start.y },
+          target: { x: end.x, y: end.y },
+          axisX: axisX,
+          axisY: axisY
+        }
+      };
+    }
+
+    function jointAngleItem(ia, ib, ic, transform) {
+      if (ia >= keypoints.length || ib >= keypoints.length || ic >= keypoints.length) return null;
+      var ka = keypoints[ia], kb = keypoints[ib], kc = keypoints[ic];
+      if (!validAngleKeypoint(ka) || !validAngleKeypoint(kb) || !validAngleKeypoint(kc)) return null;
+      var raw = calcAngle(ka, kb, kc);
+      if (raw === null) return null;
+      return {
+        angle: transform ? transform(raw) : raw,
+        x: kb.x + 16 / zoom,
+        y: kb.y + 16 / zoom,
+        points: [
+          nameForKeypoint(ia) + ' [' + ia + ']',
+          nameForKeypoint(ib) + ' [' + ib + ']',
+          nameForKeypoint(ic) + ' [' + ic + ']'
+        ],
+        vertex: nameForKeypoint(ib) + ' [' + ib + ']',
+        geometry: {
+          kind: 'joint',
+          ia: ia,
+          ib: ib,
+          ic: ic
+        }
+      };
+    }
+
+    function armSwingItem(shoulderIdx, wristIdx, elbowIdx, hipIdx) {
+      if (shoulderIdx >= keypoints.length || hipIdx >= keypoints.length) return null;
+      var shoulder = keypoints[shoulderIdx];
+      var hip = keypoints[hipIdx];
+      var endIdx = wristIdx;
+      var end = wristIdx < keypoints.length ? keypoints[wristIdx] : null;
+      if (!validAngleKeypoint(end) && elbowIdx < keypoints.length) {
+        endIdx = elbowIdx;
+        end = keypoints[elbowIdx];
+      }
+      if (!validAngleKeypoint(shoulder) || !validAngleKeypoint(hip) || !validAngleKeypoint(end)) return null;
+      return {
+        angle: directedAngleDegrees(hip.x - shoulder.x, hip.y - shoulder.y, end.x - shoulder.x, end.y - shoulder.y),
+        x: (shoulder.x + end.x) / 2,
+        y: (shoulder.y + end.y) / 2,
+        points: [
+          nameForKeypoint(shoulderIdx) + ' [' + shoulderIdx + ']',
+          nameForKeypoint(hipIdx) + ' [' + hipIdx + ']',
+          nameForKeypoint(endIdx) + ' [' + endIdx + ']'
+        ],
+        vertex: 'Govde referansi',
+        geometry: {
+          kind: 'directed',
+          origin: { x: shoulder.x, y: shoulder.y },
+          reference: { x: hip.x, y: hip.y },
+          target: { x: end.x, y: end.y }
+        }
+      };
+    }
+
+    function trunkDeviationItem(transform) {
+      if (!shoulderCenter || !hipCenter) return null;
+      var sx = shoulderCenter.point.x, sy = shoulderCenter.point.y;
+      var hx = hipCenter.point.x, hy = hipCenter.point.y;
+      var raw = vectorAngleDeviation(sx - hx, sy - hy, 0, -1);
+      if (raw === null) return null;
+      return {
+        angle: transform ? transform(raw) : raw,
+        x: (sx + hx) / 2,
+        y: (sy + hy) / 2,
+        points: ['shoulder_center', 'hip_center'],
+        vertex: 'Dikey eksen',
+        geometry: {
+          kind: 'axis',
+          origin: { x: hx, y: hy },
+          target: { x: sx, y: sy },
+          axisX: 0,
+          axisY: -1
+        }
+      };
+    }
+
+    function bodyFlightItem() {
+      if (!shoulderCenter || !hipCenter) return null;
+      var leftLeg = firstValidPoint([17, 15]);
+      var rightLeg = firstValidPoint([18, 16]);
+      if (!leftLeg || !rightLeg) return null;
+      var footMid = midpointPoint(leftLeg.point, rightLeg.point);
+      if (!footMid) return null;
+      var target = shoulderCenter.point;
+      var raw = vectorAngleDeviation(target.x - footMid.x, target.y - footMid.y, 1, 0);
+      if (raw === null) return null;
+      return {
+        angle: raw,
+        x: (target.x + footMid.x) / 2,
+        y: (target.y + footMid.y) / 2,
+        points: ['shoulder_center', 'leg_endpoint_center'],
+        vertex: 'Yatay eksen',
+        geometry: {
+          kind: 'axis',
+          origin: { x: footMid.x, y: footMid.y },
+          target: { x: target.x, y: target.y },
+          axisX: 1,
+          axisY: 0
+        }
+      };
+    }
+
+    addMetricFromItems('Bacak açısı', [
+      segmentDeviationItem(13, 18, 16, 'Dikey eksen', 0, 1, function(raw) { return 180 - raw; }),
+      segmentDeviationItem(12, 17, 15, 'Dikey eksen', 0, 1, function(raw) { return 180 - raw; })
+    ]);
+    addMetricFromItems('Gövde açısı', [trunkDeviationItem(function(raw) { return 180 - raw; })]);
+    addMetricFromItems('Diz fleksiyon açısı', [
+      jointAngleItem(13, 16, 18, function(raw) { return 180 - raw; }),
+      jointAngleItem(12, 15, 17, function(raw) { return 180 - raw; })
+    ]);
+    addMetricFromItems('Gövde-bacak açısı', [
+      jointAngleItem(7, 13, 16),
+      jointAngleItem(6, 12, 15)
+    ]);
+    addMetricFromItems('Kolların yatay açısı', [
+      segmentDeviationItem(7, 11, 9, 'Yatay eksen', 1, 0, function(raw) { return 180 - raw; }),
+      segmentDeviationItem(6, 10, 8, 'Yatay eksen', 1, 0, function(raw) { return 180 - raw; })
+    ]);
+    addMetricFromItems('Parabolik/uçuş açısı', [bodyFlightItem()]);
+    addMetricFromItems('Kalça-gövde eksantisyonu', [
+      jointAngleItem(7, 13, 16, function(raw) { return Math.max(0, raw - 90); }),
+      jointAngleItem(6, 12, 15, function(raw) { return Math.max(0, raw - 90); })
+    ]);
+    addMetricFromItems('Bacak yatay sapması', [
+      segmentDeviationItem(13, 18, 16, 'Yatay eksen', 1, 0),
+      segmentDeviationItem(12, 17, 15, 'Yatay eksen', 1, 0)
+    ]);
+    addMetricFromItems('Kolların yanda açısı', [
+      jointAngleItem(9, 7, 13),
+      jointAngleItem(8, 6, 12)
+    ]);
+    addMetricFromItems('Gövde kalça fleksiyonu', [
+      jointAngleItem(7, 13, 16, function(raw) { return 180 - raw; }),
+      jointAngleItem(6, 12, 15, function(raw) { return 180 - raw; })
+    ]);
+    addMetricFromItems('Kalça ekstansiyonu', [
+      jointAngleItem(7, 13, 16),
+      jointAngleItem(6, 12, 15)
+    ]);
+    addMetricFromItems('Kolların geriye gidişi', [
+      armSwingItem(7, 11, 9, 13),
+      armSwingItem(6, 10, 8, 12)
+    ], true);
+    addMetricFromItems('Gövde Sapması', [trunkDeviationItem()]);
+    addMetricFromItems('Kol Sapması', [
+      segmentDeviationItem(7, 11, 9, 'Yatay eksen', 1, 0),
+      segmentDeviationItem(6, 10, 8, 'Yatay eksen', 1, 0)
+    ]);
+    addMetricFromItems('Bacak Sapması', [
+      segmentDeviationItem(13, 18, 16, 'Dikey eksen', 0, 1),
+      segmentDeviationItem(12, 17, 15, 'Dikey eksen', 0, 1)
+    ]);
+    addMetricFromItems('Diz ekstansiyonu', [
+      jointAngleItem(13, 16, 18),
+      jointAngleItem(12, 15, 17)
+    ]);
 
     return metrics;
   }
@@ -754,6 +977,10 @@ function bootEditor() {
       drawDerivedJointGeometry(g.ia, g.ib, g.ic);
     } else if (g.kind === 'jointPoints') {
       drawDerivedJointPointGeometry(g.a, g.b, g.c);
+    } else if (g.kind === 'multi') {
+      (g.items || []).forEach(function(item) {
+        drawDerivedMetricGeometry({ geometry: item });
+      });
     } else if (g.kind === 'axis') {
       drawDerivedAxisGeometry(g.origin, g.target, g.axisX, g.axisY);
     } else if (g.kind === 'directed') {
@@ -2152,16 +2379,193 @@ def _add_joint_alias_metric(
         records.append(record)
 
 
-def _copy_metric_record(records: list, source_label: str, new_label: str, method_note: str = "") -> None:
-    for record in records:
-        if record.get("label") != source_label:
-            continue
-        cloned = dict(record)
-        cloned["label"] = new_label
-        if method_note:
-            cloned["method"] = f"{cloned.get('method', '')}; {method_note}".strip("; ")
-        records.append(cloned)
+def _average_degrees(values: list) -> Optional[float]:
+    clean = [float(v) for v in values if v is not None and np.isfinite(float(v))]
+    if not clean:
+        return None
+    return round(sum(clean) / len(clean), 3)
+
+
+def _circular_mean_degrees(values: list) -> Optional[float]:
+    clean = [float(v) for v in values if v is not None and np.isfinite(float(v))]
+    if not clean:
+        return None
+    sx = sum(float(np.cos(np.radians(v))) for v in clean)
+    sy = sum(float(np.sin(np.radians(v))) for v in clean)
+    if float(np.hypot(sx, sy)) < 1e-6:
+        return _average_degrees(clean)
+    angle = float(np.degrees(np.arctan2(sy, sx)))
+    while angle < 0:
+        angle += 360.0
+    while angle >= 360.0:
+        angle -= 360.0
+    return round(angle, 3)
+
+
+def _merge_metric_indices(items: list) -> list:
+    indices = []
+    for item in items:
+        for idx in item.get("keypoint_indices", []):
+            if idx not in indices:
+                indices.append(idx)
+    return indices
+
+
+def _add_composite_metric_record(
+    records: list,
+    idx_to_name: Dict[int, str],
+    label: str,
+    items: list,
+    metric_type: str,
+    reference: str,
+    method: str,
+    circular: bool = False,
+) -> None:
+    valid_items = [item for item in items if item and item.get("angle_degrees") is not None]
+    if not valid_items:
         return
+    values = [item["angle_degrees"] for item in valid_items]
+    angle = _circular_mean_degrees(values) if circular else _average_degrees(values)
+    record = _derived_metric_record(
+        label,
+        angle,
+        _merge_metric_indices(valid_items),
+        idx_to_name,
+        metric_type,
+        reference,
+        method,
+    )
+    if record:
+        record["component_metrics"] = valid_items
+        records.append(record)
+
+
+def _segment_deviation_item(
+    kps_rc: list,
+    idx_to_name: Dict[int, str],
+    start_idx: int,
+    preferred_end_idx: int,
+    fallback_end_idx: int,
+    axis_name: str,
+    axis_x: float,
+    axis_y: float,
+    transform=None,
+) -> Optional[Dict[str, Any]]:
+    start = _point_xy_from_rc(kps_rc, start_idx)
+    end = _point_xy_from_rc(kps_rc, preferred_end_idx)
+    end_idx = preferred_end_idx
+    if end is None:
+        end = _point_xy_from_rc(kps_rc, fallback_end_idx)
+        end_idx = fallback_end_idx
+    if start is None or end is None:
+        return None
+    raw = _vector_axis_deviation_degrees(end[0] - start[0], end[1] - start[1], axis_x, axis_y)
+    if raw is None:
+        return None
+    angle = transform(raw) if transform else raw
+    return {
+        "angle_degrees": round(float(angle), 3),
+        "keypoint_indices": [start_idx, end_idx],
+        "keypoint_names": _metric_names([start_idx, end_idx], idx_to_name),
+        "reference": axis_name,
+    }
+
+
+def _joint_angle_item(
+    kps_rc: list,
+    idx_to_name: Dict[int, str],
+    ia: int,
+    ib: int,
+    ic: int,
+    transform=None,
+) -> Optional[Dict[str, Any]]:
+    raw = _calc_angle_degrees_from_rc(kps_rc, ia, ib, ic)
+    if raw is None:
+        return None
+    angle = transform(raw) if transform else raw
+    return {
+        "angle_degrees": round(float(angle), 3),
+        "keypoint_indices": [ia, ib, ic],
+        "keypoint_names": _metric_names([ia, ib, ic], idx_to_name),
+        "vertex_index": ib,
+        "vertex_name": idx_to_name.get(ib, str(ib)),
+    }
+
+
+def _arm_swing_item(
+    kps_rc: list,
+    idx_to_name: Dict[int, str],
+    shoulder_idx: int,
+    wrist_idx: int,
+    elbow_idx: int,
+    hip_idx: int,
+) -> Optional[Dict[str, Any]]:
+    shoulder = _point_xy_from_rc(kps_rc, shoulder_idx)
+    hip = _point_xy_from_rc(kps_rc, hip_idx)
+    end = _point_xy_from_rc(kps_rc, wrist_idx)
+    end_idx = wrist_idx
+    if end is None:
+        end = _point_xy_from_rc(kps_rc, elbow_idx)
+        end_idx = elbow_idx
+    if shoulder is None or hip is None or end is None:
+        return None
+    angle = _directed_angle_degrees(
+        hip[0] - shoulder[0],
+        hip[1] - shoulder[1],
+        end[0] - shoulder[0],
+        end[1] - shoulder[1],
+    )
+    if angle is None:
+        return None
+    indices = [shoulder_idx, hip_idx, end_idx]
+    return {
+        "angle_degrees": angle,
+        "keypoint_indices": indices,
+        "keypoint_names": _metric_names(indices, idx_to_name),
+        "reference": "trunk line shoulder->hip",
+    }
+
+
+def _trunk_deviation_item(kps_rc: list, idx_to_name: Dict[int, str], transform=None) -> Optional[Dict[str, Any]]:
+    shoulder_center = _body_center_xy_from_rc(kps_rc, 5, 6, 7)
+    hip_center = _body_center_xy_from_rc(kps_rc, 14, 12, 13)
+    if shoulder_center is None or hip_center is None:
+        return None
+    raw = _vector_axis_deviation_degrees(
+        shoulder_center[0] - hip_center[0],
+        shoulder_center[1] - hip_center[1],
+        0.0,
+        -1.0,
+    )
+    if raw is None:
+        return None
+    angle = transform(raw) if transform else raw
+    indices = shoulder_center[2] + hip_center[2]
+    return {
+        "angle_degrees": round(float(angle), 3),
+        "keypoint_indices": indices,
+        "keypoint_names": _metric_names(indices, idx_to_name),
+        "reference": "vertical_axis",
+    }
+
+
+def _body_flight_item(kps_rc: list, idx_to_name: Dict[int, str]) -> Optional[Dict[str, Any]]:
+    shoulder_center = _body_center_xy_from_rc(kps_rc, 5, 6, 7)
+    left_leg = _first_valid_xy_from_rc(kps_rc, [17, 15])
+    right_leg = _first_valid_xy_from_rc(kps_rc, [18, 16])
+    if shoulder_center is None or left_leg is None or right_leg is None:
+        return None
+    foot_mid = ((left_leg[0] + right_leg[0]) / 2, (left_leg[1] + right_leg[1]) / 2)
+    angle = _vector_axis_deviation_degrees(shoulder_center[0] - foot_mid[0], shoulder_center[1] - foot_mid[1], 1.0, 0.0)
+    if angle is None:
+        return None
+    indices = shoulder_center[2] + left_leg[2] + right_leg[2]
+    return {
+        "angle_degrees": angle,
+        "keypoint_indices": indices,
+        "keypoint_names": _metric_names(indices, idx_to_name),
+        "reference": "horizontal_axis",
+    }
 
 
 def _first_valid_xy_from_rc(kps_rc: list, indices: list) -> Optional[Tuple[float, float, list]]:
@@ -2252,25 +2656,193 @@ def _build_derived_metric_records(kps_rc: list, idx_to_name: Dict[int, str]) -> 
     _add_joint_alias_metric(records, kps_rc, idx_to_name, "L.KalcaFleksExt", 6, 12, 15, "left hip flexion/extension")
     _add_joint_alias_metric(records, kps_rc, idx_to_name, "R.DizEkst", 13, 16, 18, "right knee extension")
     _add_joint_alias_metric(records, kps_rc, idx_to_name, "L.DizEkst", 12, 15, 17, "left knee extension")
-    _add_joint_alias_metric(records, kps_rc, idx_to_name, "Diz fleksiyon açısı", 13, 16, 18, "right knee flexion")
-    _add_joint_alias_metric(records, kps_rc, idx_to_name, "Kolların yanda açısı", 9, 7, 13, "right arm-at-side shoulder angle")
     _add_split_angle_metric(records, kps_rc, idx_to_name)
     _add_pelvis_angle_metric(records, kps_rc, idx_to_name)
 
-    _copy_metric_record(records, "R.BacakSapma", "Bacak açısı")
-    _copy_metric_record(records, "GovdeSapma", "Gövde açısı")
-    _copy_metric_record(records, "R.KalcaFleksExt", "Gövde-bacak açısı")
-    _copy_metric_record(records, "R.KolSapma", "Kolların yatay açısı")
-    _copy_metric_record(records, "GovdeSapma", "Parabolik/uçuş açısı", "single-frame 2D proxy; real flight trajectory requires multiple frames")
-    _copy_metric_record(records, "R.KalcaFleksExt", "Kalça-gövde eksantisyonu")
-    _copy_metric_record(records, "R.BacakSapma", "Bacak yatay sapması")
-    _copy_metric_record(records, "R.KalcaFleksExt", "Gövde kalça fleksiyonu")
-    _copy_metric_record(records, "R.KalcaFleksExt", "Kalça ekstansiyonu")
-    _copy_metric_record(records, "R.KolGeriGidis", "Kolların geriye gidişi")
-    _copy_metric_record(records, "GovdeSapma", "Gövde Sapması")
-    _copy_metric_record(records, "R.KolSapma", "Kol Sapması")
-    _copy_metric_record(records, "R.BacakSapma", "Bacak Sapması")
-    _copy_metric_record(records, "R.DizEkst", "Diz ekstansiyonu")
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Bacak açısı",
+        [
+            _segment_deviation_item(kps_rc, idx_to_name, 13, 18, 16, "vertical_axis", 0.0, 1.0, lambda raw: 180.0 - raw),
+            _segment_deviation_item(kps_rc, idx_to_name, 12, 17, 15, "vertical_axis", 0.0, 1.0, lambda raw: 180.0 - raw),
+        ],
+        "bilateral_segment_angle",
+        "vertical_axis",
+        "Average right/left leg segment anatomical angle from the vertical axis; ankles are preferred and knees are used if ankles are unavailable",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Gövde açısı",
+        [_trunk_deviation_item(kps_rc, idx_to_name, lambda raw: 180.0 - raw)],
+        "trunk_angle",
+        "vertical_axis",
+        "Trunk anatomical angle from vertical, computed as 180 - trunk vertical deviation",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Diz fleksiyon açısı",
+        [
+            _joint_angle_item(kps_rc, idx_to_name, 13, 16, 18, lambda raw: 180.0 - raw),
+            _joint_angle_item(kps_rc, idx_to_name, 12, 15, 17, lambda raw: 180.0 - raw),
+        ],
+        "bilateral_joint_flexion",
+        "hip-knee-ankle",
+        "Average right/left knee flexion, computed as 180 - knee extension angle",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Gövde-bacak açısı",
+        [
+            _joint_angle_item(kps_rc, idx_to_name, 7, 13, 16),
+            _joint_angle_item(kps_rc, idx_to_name, 6, 12, 15),
+        ],
+        "bilateral_joint_angle",
+        "shoulder-hip-knee",
+        "Average right/left angle between trunk and upper leg",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Kolların yatay açısı",
+        [
+            _segment_deviation_item(kps_rc, idx_to_name, 7, 11, 9, "horizontal_axis", 1.0, 0.0, lambda raw: 180.0 - raw),
+            _segment_deviation_item(kps_rc, idx_to_name, 6, 10, 8, "horizontal_axis", 1.0, 0.0, lambda raw: 180.0 - raw),
+        ],
+        "bilateral_segment_angle",
+        "horizontal_axis",
+        "Average right/left arm anatomical angle from the horizontal axis",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Parabolik/uçuş açısı",
+        [_body_flight_item(kps_rc, idx_to_name)],
+        "single_frame_body_flight_axis",
+        "horizontal_axis",
+        "Single-frame body flight axis angle from leg endpoint center to shoulder center; true parabolic trajectory requires multiple frames",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Kalça-gövde eksantisyonu",
+        [
+            _joint_angle_item(kps_rc, idx_to_name, 7, 13, 16, lambda raw: max(0.0, raw - 90.0)),
+            _joint_angle_item(kps_rc, idx_to_name, 6, 12, 15, lambda raw: max(0.0, raw - 90.0)),
+        ],
+        "bilateral_hip_extension_offset",
+        "shoulder-hip-knee",
+        "Average right/left hip-trunk extension amount above 90 degrees",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Bacak yatay sapması",
+        [
+            _segment_deviation_item(kps_rc, idx_to_name, 13, 18, 16, "horizontal_axis", 1.0, 0.0),
+            _segment_deviation_item(kps_rc, idx_to_name, 12, 17, 15, "horizontal_axis", 1.0, 0.0),
+        ],
+        "bilateral_axis_deviation",
+        "horizontal_axis",
+        "Average right/left leg deviation from the horizontal axis",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Kolların yanda açısı",
+        [
+            _joint_angle_item(kps_rc, idx_to_name, 9, 7, 13),
+            _joint_angle_item(kps_rc, idx_to_name, 8, 6, 12),
+        ],
+        "bilateral_shoulder_angle",
+        "elbow/wrist-shoulder-hip",
+        "Average right/left shoulder side angle",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Gövde kalça fleksiyonu",
+        [
+            _joint_angle_item(kps_rc, idx_to_name, 7, 13, 16, lambda raw: 180.0 - raw),
+            _joint_angle_item(kps_rc, idx_to_name, 6, 12, 15, lambda raw: 180.0 - raw),
+        ],
+        "bilateral_hip_flexion",
+        "shoulder-hip-knee",
+        "Average right/left hip flexion, computed as 180 - trunk-leg angle",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Kalça ekstansiyonu",
+        [
+            _joint_angle_item(kps_rc, idx_to_name, 7, 13, 16),
+            _joint_angle_item(kps_rc, idx_to_name, 6, 12, 15),
+        ],
+        "bilateral_hip_extension_angle",
+        "shoulder-hip-knee",
+        "Average right/left hip extension/anatomical opening angle",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Kolların geriye gidişi",
+        [
+            _arm_swing_item(kps_rc, idx_to_name, 7, 11, 9, 13),
+            _arm_swing_item(kps_rc, idx_to_name, 6, 10, 8, 12),
+        ],
+        "bilateral_directed_segment_angle",
+        "trunk line shoulder->hip",
+        "Circular mean of right/left directed arm swing angles",
+        circular=True,
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Gövde Sapması",
+        [_trunk_deviation_item(kps_rc, idx_to_name)],
+        "trunk_axis_deviation",
+        "vertical_axis",
+        "Trunk-line deviation from vertical",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Kol Sapması",
+        [
+            _segment_deviation_item(kps_rc, idx_to_name, 7, 11, 9, "horizontal_axis", 1.0, 0.0),
+            _segment_deviation_item(kps_rc, idx_to_name, 6, 10, 8, "horizontal_axis", 1.0, 0.0),
+        ],
+        "bilateral_axis_deviation",
+        "horizontal_axis",
+        "Average right/left arm deviation from the horizontal axis",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Bacak Sapması",
+        [
+            _segment_deviation_item(kps_rc, idx_to_name, 13, 18, 16, "vertical_axis", 0.0, 1.0),
+            _segment_deviation_item(kps_rc, idx_to_name, 12, 17, 15, "vertical_axis", 0.0, 1.0),
+        ],
+        "bilateral_axis_deviation",
+        "vertical_axis",
+        "Average right/left leg deviation from the vertical axis",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Diz ekstansiyonu",
+        [
+            _joint_angle_item(kps_rc, idx_to_name, 13, 16, 18),
+            _joint_angle_item(kps_rc, idx_to_name, 12, 15, 17),
+        ],
+        "bilateral_knee_extension",
+        "hip-knee-ankle",
+        "Average right/left knee extension angle",
+    )
 
     return records
 
