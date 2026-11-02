@@ -135,3 +135,13 @@ Bu yaklasim su calismalarla uyumludur:
 ## Sinirlar
 
 Bu sistem 2D goruntu koordinatlari uzerinden calistigi icin hesaplanan acilar kameraya izdusen acilardir. Kamera acisi, perspektif, goruntu duzlemine dogru/duzlemden disari hareket ve keypoint tahmin hatalari aci degerlerini etkileyebilir. Bu nedenle degerler biyomekanik yorum icin yararlidir ancak tam 3D eklem rotasyonu olarak raporlanmamalidir.
+
+# İstenen taraf-bazlı teknik açılar
+
+| Arayüz etiketi | Hesaplama | Referans |
+|---|---|---|
+| Kol savurma | Sağ ve sol omuzdan el bileğine uzanan kol segmentlerinin, aynı taraftaki omuz-kalça gövde hattına göre yönlü açılarının dairesel ortalaması | 0–360° gövde hattı; el bileği yoksa dirsek |
+| Sağ bacak açısı | Sağ kalçadan sağ ayak bileğine uzanan segmentin anatomik açısı | Dikey eksen; ayak bileği yoksa diz |
+| Sol bacak açısı | Sol kalçadan sol ayak bileğine uzanan segmentin anatomik açısı | Dikey eksen; ayak bileği yoksa diz |
+| Sağ kol açısı | Sağ omuzdan sağ el bileğine uzanan segmentin anatomik açısı | Yatay eksen; el bileği yoksa dirsek |
+| Sol kol açısı | Sol omuzdan sol el bileğine uzanan segmentin anatomik açısı | Yatay eksen; el bileği yoksa dirsek |

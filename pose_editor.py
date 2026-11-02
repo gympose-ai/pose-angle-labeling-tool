@@ -251,6 +251,11 @@ function bootEditor() {
   ];
 
   var DERIVED_ANGLE_LABELS = [
+    'Kol savurma',
+    'Sağ bacak açısı',
+    'Sol bacak açısı',
+    'Sağ kol açısı',
+    'Sol kol açısı',
     'Bacak açısı',
     'Gövde açısı',
     'Diz fleksiyon açısı',
@@ -882,6 +887,12 @@ function bootEditor() {
       segmentDeviationItem(13, 18, 16, 'Dikey eksen', 0, 1, function(raw) { return 180 - raw; }),
       segmentDeviationItem(12, 17, 15, 'Dikey eksen', 0, 1, function(raw) { return 180 - raw; })
     ]);
+    addMetricFromItems('Sağ bacak açısı', [
+      segmentDeviationItem(13, 18, 16, 'Dikey eksen', 0, 1, function(raw) { return 180 - raw; })
+    ]);
+    addMetricFromItems('Sol bacak açısı', [
+      segmentDeviationItem(12, 17, 15, 'Dikey eksen', 0, 1, function(raw) { return 180 - raw; })
+    ]);
     addMetricFromItems('Gövde açısı', [trunkDeviationItem(function(raw) { return 180 - raw; })]);
     addMetricFromItems('Diz fleksiyon açısı', [
       jointAngleItem(13, 16, 18, function(raw) { return 180 - raw; }),
@@ -893,6 +904,12 @@ function bootEditor() {
     ]);
     addMetricFromItems('Kolların yatay açısı', [
       segmentDeviationItem(7, 11, 9, 'Yatay eksen', 1, 0, function(raw) { return 180 - raw; }),
+      segmentDeviationItem(6, 10, 8, 'Yatay eksen', 1, 0, function(raw) { return 180 - raw; })
+    ]);
+    addMetricFromItems('Sağ kol açısı', [
+      segmentDeviationItem(7, 11, 9, 'Yatay eksen', 1, 0, function(raw) { return 180 - raw; })
+    ]);
+    addMetricFromItems('Sol kol açısı', [
       segmentDeviationItem(6, 10, 8, 'Yatay eksen', 1, 0, function(raw) { return 180 - raw; })
     ]);
     addMetricFromItems('Parabolik/uçuş açısı', [bodyFlightItem()]);
@@ -917,6 +934,10 @@ function bootEditor() {
       jointAngleItem(6, 12, 15)
     ]);
     addMetricFromItems('Kolların geriye gidişi', [
+      armSwingItem(7, 11, 9, 13),
+      armSwingItem(6, 10, 8, 12)
+    ], true);
+    addMetricFromItems('Kol savurma', [
       armSwingItem(7, 11, 9, 13),
       armSwingItem(6, 10, 8, 12)
     ], true);
@@ -2674,6 +2695,24 @@ def _build_derived_metric_records(kps_rc: list, idx_to_name: Dict[int, str]) -> 
     _add_composite_metric_record(
         records,
         idx_to_name,
+        "Sağ bacak açısı",
+        [_segment_deviation_item(kps_rc, idx_to_name, 13, 18, 16, "vertical_axis", 0.0, 1.0, lambda raw: 180.0 - raw)],
+        "right_leg_segment_angle",
+        "vertical_axis",
+        "Right leg anatomical angle from the vertical axis; ankle is preferred and knee is used if ankle is unavailable",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Sol bacak açısı",
+        [_segment_deviation_item(kps_rc, idx_to_name, 12, 17, 15, "vertical_axis", 0.0, 1.0, lambda raw: 180.0 - raw)],
+        "left_leg_segment_angle",
+        "vertical_axis",
+        "Left leg anatomical angle from the vertical axis; ankle is preferred and knee is used if ankle is unavailable",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
         "Gövde açısı",
         [_trunk_deviation_item(kps_rc, idx_to_name, lambda raw: 180.0 - raw)],
         "trunk_angle",
@@ -2715,6 +2754,24 @@ def _build_derived_metric_records(kps_rc: list, idx_to_name: Dict[int, str]) -> 
         "bilateral_segment_angle",
         "horizontal_axis",
         "Average right/left arm anatomical angle from the horizontal axis",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Sağ kol açısı",
+        [_segment_deviation_item(kps_rc, idx_to_name, 7, 11, 9, "horizontal_axis", 1.0, 0.0, lambda raw: 180.0 - raw)],
+        "right_arm_segment_angle",
+        "horizontal_axis",
+        "Right arm anatomical angle from the horizontal axis; wrist is preferred and elbow is used if wrist is unavailable",
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Sol kol açısı",
+        [_segment_deviation_item(kps_rc, idx_to_name, 6, 10, 8, "horizontal_axis", 1.0, 0.0, lambda raw: 180.0 - raw)],
+        "left_arm_segment_angle",
+        "horizontal_axis",
+        "Left arm anatomical angle from the horizontal axis; wrist is preferred and elbow is used if wrist is unavailable",
     )
     _add_composite_metric_record(
         records,
@@ -2796,6 +2853,19 @@ def _build_derived_metric_records(kps_rc: list, idx_to_name: Dict[int, str]) -> 
         "bilateral_directed_segment_angle",
         "trunk line shoulder->hip",
         "Circular mean of right/left directed arm swing angles",
+        circular=True,
+    )
+    _add_composite_metric_record(
+        records,
+        idx_to_name,
+        "Kol savurma",
+        [
+            _arm_swing_item(kps_rc, idx_to_name, 7, 11, 9, 13),
+            _arm_swing_item(kps_rc, idx_to_name, 6, 10, 8, 12),
+        ],
+        "bilateral_arm_swing_angle",
+        "trunk line shoulder->hip",
+        "Circular mean of right/left 0-360 degree directed arm swing angles; wrists are preferred and elbows are used as fallback",
         circular=True,
     )
     _add_composite_metric_record(
